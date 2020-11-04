@@ -17,16 +17,16 @@ def readme():
 
 
 setup(
-    name='pytal',
+    name='e3nb',
     # use_scm_version=True,
     version=0.1,
     license='MIT License',
-    description='Python Telecommunication Assessment Library',
+    description='Engineering-Economic Evaluation of Non-Line-of-Sight Backhaul',
     long_description=readme(),
     long_description_content_type="text/markdown",
     author='Ed Oughton',
     author_email='edward.oughton@gmail.com',
-    url='https://github.com/edwardoughton/pytal',
+    url='https://github.com/edwardoughton/e3nb',
     packages=find_packages('src'),
     package_dir={'': 'src'},
     py_modules=[splitext(basename(path))[0] for path in glob('src/*.py')],
