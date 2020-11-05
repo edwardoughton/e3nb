@@ -11,7 +11,7 @@ install:
   - pip freeze
 
 script:
-  - python -m pytest --cov=pytal tests
+  - python -m pytest --cov=e3nb tests
 
 after_success:
   - if [[ "$TRAVIS_PYTHON_VERSION" == "3.6" ]]; then coveralls || echo "failed"; fi
