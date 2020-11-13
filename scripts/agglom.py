@@ -678,7 +678,7 @@ def get_settlement_routing_lookup(country):
             output.append({
                 'id': 'NA',
                 'source': region[GID_level],
-                'regions': region[GID_level],
+                'regions': [region[GID_level]],
                 })
 
     output = pd.DataFrame(output)

@@ -44,7 +44,7 @@ def reproject_raster(in_path, out_path):
     return(out_path)
 
 # import grass.script as grass
-filename = 'S004E026_AVE_DSM.tif' #'S004E027_AVE_DSM.tif'
+filename = '10S090W_20101117_gmted_med300.tif' #'S004E027_AVE_DSM.tif'
 input_path = os.path.join(BASE_PATH, filename)
 output_path = os.path.join(BASE_PATH, 'S004E026_AVE_DSM_reprojected.tif')
 
@@ -79,14 +79,12 @@ with Session(gisdb=gis_path, location="location", create_opts="EPSG:3857"):
     gcore.run_command('r.viewshed',
             input='test_output',
             output='viewshed.tif',
-            coordinate= [2950000, -400000],#[27.5, -3.5],
+            coordinate= [-8711068, -509143],#[27.5, -3.5],
             obs_elev=1.75,
             tgt_elev=0.0,
             memory=5000,
             overwrite=True,
             quiet=True,
-            max_distance=20000,
+            max_distance=10000,
             verbose=True
     )
-    # gcore.run_command('r.external.out', directory=output_dir, format="GTiff")
-    # gcore.run_command('r.to.vect', input='test_output', output='test_output.vector', type='area')
