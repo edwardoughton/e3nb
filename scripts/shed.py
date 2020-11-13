@@ -46,7 +46,7 @@ def reproject_raster(in_path, out_path):
 # import grass.script as grass
 filename = '10S090W_20101117_gmted_med300.tif' #'S004E027_AVE_DSM.tif'
 input_path = os.path.join(BASE_PATH, filename)
-output_path = os.path.join(BASE_PATH, 'S004E026_AVE_DSM_reprojected.tif')
+output_path = os.path.join(BASE_PATH, '10S090W_20101117_gmted_med300_reprojected.tif')
 
 reproject_raster(input_path, output_path)
 
