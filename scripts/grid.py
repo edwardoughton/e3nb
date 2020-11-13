@@ -23,24 +23,19 @@ DATA_INTERMEDIATE = os.path.join(BASE_PATH, 'intermediate')
 DATA_PROCESSED = os.path.join(BASE_PATH, 'processed')
 
 
-def generate_grid(country):
+def generate_grid(region, x_length, y_length):
     """
-    Generate a 10x10km spatial grid for the chosen country.
+    Generate a spatial grid of nxn meters for the chosen shape.
 
     """
-    iso3 = country['iso3']
-
-    filename = 'national_outline.shp'
-    country_outline = gpd.read_file(os.path.join(DATA_INTERMEDIATE, iso3, filename))
-
-    country_outline.crs = "epsg:4326"
-    country_outline = country_outline.to_crs("epsg:3857")
+    region.crs = "epsg:4326"
+    country_outline = region.to_crs("epsg:3857")
 
     xmin, ymin, xmax, ymax = country_outline.total_bounds
 
     #10km sides, leading to 100km^2 area
-    length = 1e5
-    wide = 1e5
+    length = x_length #1e5
+    wide = y_length #1e5
 
     cols = list(range(int(np.floor(xmin)), int(np.ceil(xmax + wide)), int(wide)))
     rows = list(range(int(np.floor(ymin)), int(np.ceil(ymax + length)), int(length)))
@@ -73,12 +68,9 @@ def generate_grid(country):
     grid = grid.to_crs("epsg:4326")
     grid = grid[grid.geometry.notnull()]
 
-    output_dir = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    grid.to_file(os.path.join(output_dir, 'grid_10x10km.shp'))
-
     print('Completed grid generation process')
+
+    return grid
 
 
 if __name__ == '__main__':
