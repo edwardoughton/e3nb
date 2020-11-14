@@ -5,22 +5,25 @@ Process agglomeration layer
 import os
 import configparser
 import json
-# import csv
+import glob
+import numpy as np
 import pandas as pd
 import geopandas as gpd
-# import pyproj
 from shapely.geometry import LineString, Polygon, MultiPoint, MultiPolygon, shape, mapping
 from shapely.ops import unary_union, nearest_points #transform,
-# import fiona
-# import fiona.crs
 import rasterio
+from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.mask import mask
 from rasterstats import zonal_stats
-# import networkx as nx
-# from rtree import index
-# import numpy as np
-# import random
-# import math
+
+grass7bin = r'"C:\Program Files\GRASS GIS 7.8\grass78.bat"'
+os.environ['GRASSBIN'] = grass7bin
+os.environ['PATH'] += ';' + r"C:\Program Files\GRASS GIS 7.8\lib"
+
+from grass_session import Session
+from grass.script import core as gcore
+
+from grid import generate_grid
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), 'script_config.ini'))
@@ -216,8 +219,8 @@ def process_settlement_layer(country):
     path_country = os.path.join(DATA_INTERMEDIATE, iso3)
     shape_path = os.path.join(path_country, 'settlements.tif')
 
-    if os.path.exists(shape_path):
-        return print('Completed settlement layer processing')
+    # if os.path.exists(shape_path):
+    #     return print('Completed settlement layer processing')
 
     print('----')
     print('Working on {} level {}'.format(iso3, regional_level))
@@ -687,6 +690,358 @@ def get_settlement_routing_lookup(country):
     return print('Completed settlement routing lookup')
 
 
+def create_regions_to_model(country):
+    """
+    Subset areas to model. Create a union when multiple areas are required.
+
+    """
+    iso3 = country['iso3']
+    GID_level = 'GID_{}'.format(country['regional_level'])
+
+    filename = 'regions_{}_{}.shp'.format(country['regional_level'], iso3)
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'regions', filename)
+    regions = gpd.read_file(path, crs='apsg:4326')
+
+    filename = 'settlement_routing_lookup.csv'
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure', filename)
+    settlement_routing_lookup = load_settlement_routing_lookup(path)
+
+    seen = set()
+
+    for idx, region in regions.iterrows():
+
+        if not region[GID_level] == 'PER.1.4_1': #'PER.6.8_1':
+            continue
+
+        if region[GID_level] in seen:
+            continue
+
+        regions_to_model = get_regions_to_model(
+            region[GID_level],
+            GID_level,
+            regions,
+            settlement_routing_lookup
+        )
+
+        unique_regions = str(regions_to_model[GID_level].unique())
+        unique_regions = unique_regions.replace('[', '').replace(']', '').replace(' ', '_')
+        regions_to_model = regions_to_model.copy()
+        regions_to_model['modeled_regions'] = unique_regions
+        regions_to_model = regions_to_model.dissolve(by='modeled_regions')
+
+        filename = '{}.shp'.format(unique_regions)
+        folder = os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions')
+        path = os.path.join(folder, filename)
+
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        regions_to_model.to_file(path, crs='epsg:4326')
+
+        grid = generate_grid(regions_to_model, 10000, 10000)
+
+        folder = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
+
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        grid.to_file(os.path.join(folder, '{}.shp'.format(unique_regions)))
+
+    return print('Completed creation of regions to model')
+
+
+def generate_grid(region, x_length, y_length):
+    """
+    Generate a spatial grid of nxn meters for the chosen shape.
+
+    """
+    region.crs = "epsg:4326"
+    country_outline = region.to_crs("epsg:3857")
+
+    xmin, ymin, xmax, ymax = country_outline.total_bounds
+
+    #10km sides, leading to 100km^2 area
+    length = x_length #1e5
+    wide = y_length #1e5
+
+    cols = list(range(int(np.floor(xmin)), int(np.ceil(xmax + wide)), int(wide)))
+    rows = list(range(int(np.floor(ymin)), int(np.ceil(ymax + length)), int(length)))
+    rows.reverse()
+
+    polygons = []
+    for x in cols:
+        for y in rows:
+            polygons.append( Polygon([(x,y), (x+wide, y), (x+wide, y-length), (x, y-length)]))
+
+    #create grid as geopandas dataframe
+    grid = gpd.GeoDataFrame({'geometry': polygons}, crs='epsg:3857')
+
+    #add grid id column and copy
+    grid['id'] = grid.index
+
+    #copy dataframe and convert to centroids
+    centroids = grid.copy()
+    centroids['geometry'] = centroids['geometry'].representative_point()
+
+    #get centroids within national boundary and select just id column
+    centroids = gpd.overlay(centroids, country_outline, how='intersection')
+    centroids = centroids[['id']]
+
+    #get those grid polygons which intersect with centroids
+    grid = pd.merge(grid, centroids, on='id', how='inner')
+
+    #convert back to WGS85 and remove null geometries
+    grid.crs = "epsg:3857"
+    grid = grid.to_crs("epsg:4326")
+    grid = grid[grid.geometry.notnull()]
+
+    print('Completed grid generation process')
+
+    return grid
+
+
+def load_settlement_routing_lookup(path):
+    """
+    Load settlement routing lookup.
+
+    """
+    settlement_routing_lut = pd.read_csv(path, converters={'regions': eval})
+
+    settlement_routing_lut = settlement_routing_lut.to_dict('records')
+
+    output = {}
+
+    for item in settlement_routing_lut:
+        output[item['source']] =  item['regions']
+
+    return output
+
+
+def get_regions_to_model(region_id, GID_level, regions, settlement_routing_lookup):
+    """
+    Return the regions to model as a geopandas dataframe.
+
+    """
+    region_ids_to_model = settlement_routing_lookup[region_id]
+
+    regions_to_model = regions[regions[GID_level].isin(region_ids_to_model)]
+
+    return regions_to_model
+
+
+def process_dem(country):
+    """
+    Clip the dem given a set of grid tiles.
+
+    Parameters
+    ----------
+    country : string
+        Three digit ISO country code.
+
+    """
+    iso3 = country['iso3']
+
+    filename = '10S090W_20101117_gmted_med300.tif'
+    path_dem = os.path.join(DATA_RAW, 'gmted', filename)
+
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
+    all_paths = glob.glob(path + '/*.shp')
+
+    for path in all_paths:
+
+        tiles = gpd.read_file(path)
+
+        folder = os.path.join(DATA_INTERMEDIATE, iso3, 'gmted', os.path.basename(path)[:-4])
+
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        for idx, grid_tile in tiles.iterrows():
+
+            grid_tile = gpd.GeoDataFrame({'geometry': grid_tile['geometry']}, index=[0])
+
+            bbox = grid_tile.envelope
+
+            geo = gpd.GeoDataFrame({'geometry': bbox}, crs=('epsg:4326'))
+
+            coords = [json.loads(geo.to_json())['features'][0]['geometry']]
+
+            dem = rasterio.open(path_dem, "r+")
+            dem.nodata = 0
+
+            out_img, out_transform = mask(dem, coords, crop=True)
+
+            out_meta = dem.meta.copy()
+
+            out_meta.update({"driver": "GTiff",
+                            "height": out_img.shape[1],
+                            "width": out_img.shape[2],
+                            "transform": out_transform,
+                            "crs": 'epsg:4326'})
+
+            basename = os.path.basename(path)[:-4]
+            path_output = os.path.join(folder, '{}_{}.tif'.format(basename, idx))
+
+            with rasterio.open(path_output, "w", **out_meta) as dest:
+                    dest.write(out_img)
+
+    return print('Completed processing of dem layer')
+
+
+def create_high_points(country):
+    """
+    Gets the highest point in each tile.
+
+    argmax and unravel index find the row and column of the max value in the raster matrix
+    then src.xy transforms back to geographic coordinates (in whatever CRS the raster is in)
+
+    """
+    iso3 = country['iso3']
+
+    paths = glob.glob(os.path.join(DATA_INTERMEDIATE, iso3, 'gmted' + '/*'))
+
+    for path in paths:
+
+        folder = os.path.join(DATA_INTERMEDIATE, iso3, 'high_points')
+
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        all_paths = glob.glob(path + '\*')
+
+        output = []
+
+        for tile_path in all_paths:
+
+            with rasterio.open(tile_path) as src:
+                ds = src.read(1)
+                row, col = np.unravel_index(np.argmax(ds, axis=None), ds.shape)
+                maxval = ds[row, col]
+                x, y = src.xy(row, col)
+                output.append({
+                    'geometry': {
+                        'type': 'Point',
+                        'coordinates': (x, y)
+                    },
+                    'properties': {
+                        'row': row,
+                        'col': col,
+                        'height_m': maxval,
+                        'modeling_region': os.path.basename(path)
+                    }
+                })
+
+        output = gpd.GeoDataFrame.from_features(output, crs='epsg:4326')
+
+        filename = '{}.shp'.format(os.path.basename(path))
+        output.to_file(os.path.join(folder, filename), crs='epsg:4326')
+
+    return print('Completed creation of high points')
+
+
+def reproject_raster():
+    """
+    Convert the raster layer to 3857.
+
+    """
+    filename = '10S090W_20101117_gmted_med300.tif'
+    path_input = os.path.join(DATA_RAW, 'gmted', filename)
+    path_output = os.path.join(DATA_RAW, 'gmted', '10S090W_20101117_gmted_med300_reprojected.tif')
+
+    crs = {'init': 'epsg:3857'}
+
+    # reproject raster to project crs
+    with rasterio.open(path_input) as src:
+
+        src_crs = src.crs
+
+        transform, width, height = calculate_default_transform(
+            src_crs, crs, src.width, src.height, *src.bounds)
+
+        kwargs = src.meta.copy()
+
+        kwargs.update({
+            'crs': crs,
+            'transform': transform,
+            'width': width,
+            'height': height})
+
+        with rasterio.open(path_output, 'w', **kwargs) as dst:
+            for i in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, i),
+                    destination=rasterio.band(dst, i),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=transform,
+                    dst_crs=crs,
+                    resampling=Resampling.nearest)
+
+    return print('Completed raster reprojection')
+
+
+def process_viewsheds(country):
+    """
+    Process viewsheds for all highpoints.
+
+    """
+    iso3 = country['iso3']
+
+    filename = '10S090W_20101117_gmted_med300_reprojected.tif'
+    path_input = os.path.join(DATA_RAW, 'gmted', filename)
+
+    paths = glob.glob(os.path.join(DATA_INTERMEDIATE, iso3, 'high_points' + '/*.shp'))
+
+    for path in paths:
+
+        high_points = gpd.read_file(path, crs='epsg:4326')#[:2]
+        high_points = high_points.to_crs('epsg:3857')
+
+        path_output = os.path.join(DATA_INTERMEDIATE, iso3, 'viewsheds')
+
+        if not os.path.exists(path_output):
+            os.makedirs(path_output)
+
+        for idx, point in high_points.iterrows():
+
+            with Session(gisdb=path_output, location="location", create_opts="EPSG:3857"):
+
+                print('parse command')
+                print(gcore.parse_command("g.gisenv", flags="s"))#, set="DEBUG=3"
+
+                print('r.external')
+                # now link a GDAL supported raster file to a binary raster map layer,
+                # from any GDAL supported raster map format, with an optional title.
+                # The file is not imported but just registered as GRASS raster map.
+                gcore.run_command('r.external', input=path_input, output=idx, overwrite=True)
+
+                print('r.external.out')
+                #write out as geotiff
+                gcore.run_command('r.external.out', directory='viewsheds', format="GTiff")
+
+                print('r.region')
+                #manage the settings of the current geographic region
+                gcore.run_command('g.region', raster=idx)
+
+                print('r.viewshed')
+                #for each point in the output that is NULL: No LOS
+                gcore.run_command('r.viewshed',
+                        input=idx,
+                        output='{}.tif'.format(idx),
+                        coordinate= [point['geometry'].x, point['geometry'].y], #[-8711068, -509143],#[27.5, -3.5],
+                        obs_elev=30,
+                        tgt_elev=30,
+                        memory=5000,
+                        overwrite=True,
+                        quiet=True,
+                        max_distance=40000,
+                        # verbose=True
+                )
+                point['geometry'].x, point['geometry'].y
+
+    return print('Completed viewsheds')
+
+
 if __name__ == '__main__':
 
     # countries = find_country_list(['Africa'])
@@ -722,3 +1077,18 @@ if __name__ == '__main__':
 
         print('Get settlement routing lookup')
         get_settlement_routing_lookup(country)
+
+        print('Create regions to model')
+        create_regions_to_model(country)
+
+        print('Processing dem')
+        process_dem(country)
+
+        print('Extract high points')
+        create_high_points(country)
+
+        print('Reproject raster')
+        reproject_raster()
+
+        print('Run viewsheds')
+        process_viewsheds(country)
