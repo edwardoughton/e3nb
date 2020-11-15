@@ -23,8 +23,6 @@ os.environ['PATH'] += ';' + r"C:\Program Files\GRASS GIS 7.8\lib"
 from grass_session import Session
 from grass.script import core as gcore
 
-from grid import generate_grid
-
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), 'script_config.ini'))
 BASE_PATH = CONFIG['file_locations']['base_path']
@@ -858,6 +856,10 @@ def process_dem(country):
 
         for idx, grid_tile in tiles.iterrows():
 
+            x = grid_tile['geometry'].centroid.x
+            y = grid_tile['geometry'].centroid.y
+            tile_centroid = '{}_{}'.format(x, y)
+
             grid_tile = gpd.GeoDataFrame({'geometry': grid_tile['geometry']}, index=[0])
 
             bbox = grid_tile.envelope
@@ -879,8 +881,7 @@ def process_dem(country):
                             "transform": out_transform,
                             "crs": 'epsg:4326'})
 
-            basename = os.path.basename(path)[:-4]
-            path_output = os.path.join(folder, '{}_{}.tif'.format(basename, idx))
+            path_output = os.path.join(folder, '{}.tif'.format(tile_centroid))
 
             with rasterio.open(path_output, "w", **out_meta) as dest:
                     dest.write(out_img)
@@ -927,7 +928,8 @@ def create_high_points(country):
                         'row': row,
                         'col': col,
                         'height_m': maxval,
-                        'modeling_region': os.path.basename(path)
+                        'modeling_region': os.path.basename(path),
+                        'tile': os.path.basename(tile_path)[:-4]
                     }
                 })
 
@@ -994,15 +996,17 @@ def process_viewsheds(country):
 
     for path in paths:
 
-        high_points = gpd.read_file(path, crs='epsg:4326')#[:2]
-        high_points = high_points.to_crs('epsg:3857')
-
-        path_output = os.path.join(DATA_INTERMEDIATE, iso3, 'viewsheds')
+        path_output = os.path.join(DATA_INTERMEDIATE, iso3, 'viewsheds', os.path.basename(path)[:-4])
 
         if not os.path.exists(path_output):
             os.makedirs(path_output)
 
+        high_points = gpd.read_file(path, crs='epsg:4326')#[:2]
+        high_points = high_points.to_crs('epsg:3857')
+
         for idx, point in high_points.iterrows():
+
+            tile_name = point['tile']
 
             with Session(gisdb=path_output, location="location", create_opts="EPSG:3857"):
 
@@ -1013,7 +1017,7 @@ def process_viewsheds(country):
                 # now link a GDAL supported raster file to a binary raster map layer,
                 # from any GDAL supported raster map format, with an optional title.
                 # The file is not imported but just registered as GRASS raster map.
-                gcore.run_command('r.external', input=path_input, output=idx, overwrite=True)
+                gcore.run_command('r.external', input=path_input, output=tile_name, overwrite=True)
 
                 print('r.external.out')
                 #write out as geotiff
@@ -1021,25 +1025,93 @@ def process_viewsheds(country):
 
                 print('r.region')
                 #manage the settings of the current geographic region
-                gcore.run_command('g.region', raster=idx)
+                gcore.run_command('g.region', raster=tile_name)
 
                 print('r.viewshed')
                 #for each point in the output that is NULL: No LOS
                 gcore.run_command('r.viewshed',
-                        input=idx,
-                        output='{}.tif'.format(idx),
+                        input=tile_name,
+                        output='{}.tif'.format(tile_name),
                         coordinate= [point['geometry'].x, point['geometry'].y], #[-8711068, -509143],#[27.5, -3.5],
-                        obs_elev=30,
-                        tgt_elev=30,
+                        observer_elevation=30,
+                        target_elevation=30,
                         memory=5000,
                         overwrite=True,
                         quiet=True,
                         max_distance=40000,
                         # verbose=True
                 )
-                point['geometry'].x, point['geometry'].y
 
     return print('Completed viewsheds')
+
+
+def export_los_lookup(country):
+    """
+    Export a los lookup for each modeled area.
+
+    """
+    iso3 = country['iso3']
+    radius = 40000
+
+    path_output = os.path.join(DATA_INTERMEDIATE, iso3, 'los_lookup')
+
+    if not os.path.exists(path_output):
+        os.makedirs(path_output)
+
+    paths = glob.glob(os.path.join(DATA_INTERMEDIATE, iso3, 'high_points' + '/*.shp'))
+
+    for path in paths:
+
+        high_points = gpd.read_file(path, crs='epsg:4326')
+        high_points = high_points.to_crs('epsg:3857')
+
+        results = []
+
+        for idx, point in high_points.iterrows():
+
+            tile_name = point['tile']
+
+            x = point['geometry'].centroid.x
+            y = point['geometry'].centroid.y
+            point_coords = '{}_{}'.format(x, y)
+
+            point['geometry'] = point['geometry'].buffer(radius)
+
+            within_radius = high_points[high_points.within(point['geometry'])]
+
+            viewshed_path = os.path.join(DATA_INTERMEDIATE, iso3, 'viewsheds',
+                os.path.basename(path)[:-4], 'location', 'PERMANENT', 'viewsheds', tile_name + '.tif')
+
+            for idx, node in within_radius.iterrows():
+
+                x = node['geometry'].centroid.x
+                y = node['geometry'].centroid.y
+                node_coords = '{}_{}'.format(x, y)
+
+                geo = gpd.GeoDataFrame({'geometry': [node['geometry']]}, index=[0])
+
+                with rasterio.open(viewshed_path) as src:
+
+                    out_image, out_transform = mask(src, geo['geometry'], crop=True)
+
+                    value = out_image[0][0][0]
+
+                    if not np.isnan(value):
+                        results.append({
+                            'type': 'los',
+                            'source': point_coords,
+                            'sink': node_coords,
+                        })
+                    else:
+                        results.append({
+                            'type': 'nlos',
+                            'source': point_coords,
+                            'sink': node_coords,
+                        })
+
+        results = pd.DataFrame(results)
+
+        results.to_csv(os.path.join(path_output, os.path.basename(path)[:-4] + '.csv'), index=False)
 
 
 if __name__ == '__main__':
@@ -1057,38 +1129,41 @@ if __name__ == '__main__':
 
         print('Working on {}'.format(country['iso3']))
 
-        print('Processing country boundary')
-        process_country_shapes(country)
+        # print('Processing country boundary')
+        # process_country_shapes(country)
 
-        print('Processing regions')
-        process_regions(country)
+        # print('Processing regions')
+        # process_regions(country)
 
-        print('Processing settlement layer')
-        process_settlement_layer(country)
+        # print('Processing settlement layer')
+        # process_settlement_layer(country)
 
-        print('Generating agglomeration layer')
-        generate_agglomeration_lut(country)
+        # print('Generating agglomeration layer')
+        # generate_agglomeration_lut(country)
 
-        print('Find largest settlement in each region')
-        find_largest_regional_settlement(country)
+        # print('Find largest settlement in each region')
+        # find_largest_regional_settlement(country)
 
-        print('Get settlement routing paths')
-        get_settlement_routing_paths(country)
+        # print('Get settlement routing paths')
+        # get_settlement_routing_paths(country)
 
-        print('Get settlement routing lookup')
-        get_settlement_routing_lookup(country)
+        # print('Get settlement routing lookup')
+        # get_settlement_routing_lookup(country)
 
-        print('Create regions to model')
-        create_regions_to_model(country)
+        # print('Create regions to model')
+        # create_regions_to_model(country)
 
-        print('Processing dem')
-        process_dem(country)
+        # print('Processing dem')
+        # process_dem(country)
 
-        print('Extract high points')
-        create_high_points(country)
+        # print('Extract high points')
+        # create_high_points(country)
 
-        print('Reproject raster')
-        reproject_raster()
+        # print('Reproject raster')
+        # reproject_raster()
 
-        print('Run viewsheds')
-        process_viewsheds(country)
+        # print('Run viewsheds')
+        # process_viewsheds(country)
+
+        print('Export LOS lookup')
+        export_los_lookup(country)
