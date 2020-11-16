@@ -5,6 +5,7 @@ Process agglomeration layer
 import os
 import configparser
 import json
+import math
 import glob
 import numpy as np
 import pandas as pd
@@ -1062,7 +1063,7 @@ def export_los_lookup(country):
 
     for path in paths:
 
-        high_points = gpd.read_file(path, crs='epsg:4326')
+        high_points = gpd.read_file(path, crs='epsg:4326')#[:5]
         high_points = high_points.to_crs('epsg:3857')
 
         results = []
@@ -1071,9 +1072,9 @@ def export_los_lookup(country):
 
             tile_name = point['tile']
 
-            x = point['geometry'].centroid.x
-            y = point['geometry'].centroid.y
-            point_coords = '{}_{}'.format(x, y)
+            x_source = point['geometry'].centroid.x
+            y_source = point['geometry'].centroid.y
+            point_coords = '{}_{}'.format(x_source, y_source)
 
             point['geometry'] = point['geometry'].buffer(radius)
 
@@ -1084,9 +1085,14 @@ def export_los_lookup(country):
 
             for idx, node in within_radius.iterrows():
 
-                x = node['geometry'].centroid.x
-                y = node['geometry'].centroid.y
-                node_coords = '{}_{}'.format(x, y)
+                x_sink = node['geometry'].centroid.x
+                y_sink = node['geometry'].centroid.y
+                node_coords = '{}_{}'.format(x_sink, y_sink)
+
+                if point_coords == node_coords:
+                    continue
+
+                distance = measure_distance(x_source, y_source, x_sink, y_sink)
 
                 geo = gpd.GeoDataFrame({'geometry': [node['geometry']]}, index=[0])
 
@@ -1101,17 +1107,30 @@ def export_los_lookup(country):
                             'type': 'los',
                             'source': point_coords,
                             'sink': node_coords,
+                            'distance_m': distance,
                         })
                     else:
                         results.append({
                             'type': 'nlos',
                             'source': point_coords,
                             'sink': node_coords,
+                            'distance_m': distance,
                         })
 
         results = pd.DataFrame(results)
 
-        results.to_csv(os.path.join(path_output, os.path.basename(path)[:-4] + '.csv'), index=False)
+        filename = os.path.basename(path)[:-4] + '.csv'
+        results.to_csv(os.path.join(path_output, filename), index=False)
+
+
+def measure_distance(x1, y1, x2, y2):
+    """
+    Find distance between two sets of points.
+
+    """
+    distance = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
+    return distance
 
 
 if __name__ == '__main__':
@@ -1165,5 +1184,7 @@ if __name__ == '__main__':
         # print('Run viewsheds')
         # process_viewsheds(country)
 
-        print('Export LOS lookup')
+        print('Processing LOS lookup')
         export_los_lookup(country)
+
+    print('Preprocessing complete')
