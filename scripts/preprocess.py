@@ -1,5 +1,5 @@
 """
-Process agglomeration layer
+Process settlement layer
 
 """
 import os
@@ -13,6 +13,7 @@ import geopandas as gpd
 from shapely.geometry import LineString, Polygon, MultiPoint, MultiPolygon, shape, mapping
 from shapely.ops import unary_union, nearest_points #transform,
 import rasterio
+import networkx as nx
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.mask import mask
 from rasterstats import zonal_stats
@@ -218,8 +219,8 @@ def process_settlement_layer(country):
     path_country = os.path.join(DATA_INTERMEDIATE, iso3)
     shape_path = os.path.join(path_country, 'settlements.tif')
 
-    # if os.path.exists(shape_path):
-    #     return print('Completed settlement layer processing')
+    if os.path.exists(shape_path):
+        return print('Completed settlement layer processing')
 
     print('----')
     print('Working on {} level {}'.format(iso3, regional_level))
@@ -300,24 +301,24 @@ def exclude_small_shapes(x):
         return MultiPolygon(new_geom)
 
 
-def generate_agglomeration_lut(country):
+def generate_settlement_lut(country):
     """
-    Generate a lookup table of agglomerations.
+    Generate a lookup table of settlements.
 
     """
     iso3 = country['iso3']
     regional_level = country['regional_level']
     GID_level = 'GID_{}'.format(regional_level)
 
-    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations')
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
     if not os.path.exists(folder):
         os.makedirs(folder)
-    path_output = os.path.join(folder, 'agglomerations.shp')
+    path_output = os.path.join(folder, 'settlements.shp')
 
     if os.path.exists(path_output):
-        return print('Agglomeration processing has already completed')
+        return print('settlement processing has already completed')
 
-    print('Working on {} agglomeration lookup table'.format(iso3))
+    print('Working on {} settlement lookup table'.format(iso3))
 
     filename = 'regions_{}_{}.shp'.format(regional_level, iso3)
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
@@ -329,13 +330,13 @@ def generate_agglomeration_lut(country):
     settlements.nodata = 255
     settlements.crs = {"init": "epsg:4326"}
 
-    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations', 'tifs')
+    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'tifs')
     if not os.path.exists(folder_tifs):
         os.makedirs(folder_tifs)
 
     for idx, region in regions.iterrows():
 
-        # if not region['GID_2'] in single_region:
+        # if not region['GID_2'] == ['PER.1.1_1']: #single_region:
         #     continue
 
         bbox = region['geometry'].envelope
@@ -362,10 +363,10 @@ def generate_agglomeration_lut(country):
 
     print('Completed settlement.tif regional segmentation')
 
-    nodes, missing_nodes = find_nodes(country, regions)
+    nodes = find_nodes(country, regions)
 
-    if len(missing_nodes) > 0:
-        nodes = nodes + missing_nodes
+    # if len(missing_nodes) > 0:
+    #     nodes = nodes + missing_nodes
 
     nodes = gpd.GeoDataFrame.from_features(nodes, crs='epsg:4326')
 
@@ -373,9 +374,9 @@ def generate_agglomeration_lut(country):
     nodes = pd.concat([nodes, bool_list], axis=1)
     nodes = nodes[nodes[0] == True].drop(columns=0)
 
-    agglomerations = []
+    settlements = []
 
-    print('Identifying agglomerations')
+    print('Identifying settlements')
     for idx1, region in regions.iterrows():
 
         # if not region['GID_2'] in single_region:
@@ -385,7 +386,7 @@ def generate_agglomeration_lut(country):
         for idx2, node in nodes.iterrows():
             if node['geometry'].intersects(region['geometry']):
                 if node['sum'] > 0:
-                    agglomerations.append({
+                    settlements.append({
                         'type': 'Feature',
                         'geometry': mapping(node['geometry']),
                         'properties': {
@@ -398,7 +399,7 @@ def generate_agglomeration_lut(country):
                     })
                     seen.add(region[GID_level])
 
-    agglomerations = gpd.GeoDataFrame.from_features(
+    settlements = gpd.GeoDataFrame.from_features(
             [
                 {
                     'geometry': item['geometry'],
@@ -410,29 +411,33 @@ def generate_agglomeration_lut(country):
                         'type': item['properties']['type'],
                     }
                 }
-                for item in agglomerations
+                for item in settlements
             ],
             crs='epsg:4326'
         )
 
-    agglomerations['lon'] = round(agglomerations['geometry'].x, 5)
-    agglomerations['lat'] = round(agglomerations['geometry'].y, 5)
+    settlements['lon'] = round(settlements['geometry'].x, 5)
+    settlements['lat'] = round(settlements['geometry'].y, 5)
 
-    agglomerations = agglomerations.drop_duplicates(subset=['lon', 'lat'])
+    settlements = settlements.drop_duplicates(subset=['lon', 'lat'])
 
-    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations')
-    path_output = os.path.join(folder, 'agglomerations' + '.shp')
-    agglomerations.to_file(path_output)
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
+    path_output = os.path.join(folder, 'settlements' + '.shp')
+    settlements.to_file(path_output)
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
+
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
     path_output = os.path.join(folder, 'main_nodes' + '.shp')
-    main_nodes = agglomerations.loc[agglomerations['population'] >= 20000]
+    main_nodes = settlements.loc[settlements['population'] >= 20000]
     main_nodes.to_file(path_output)
 
-    agglomerations = agglomerations[['lon', 'lat', GID_level, 'population', 'type']]
-    agglomerations.to_csv(os.path.join(folder, 'agglomerations.csv'), index=False)
+    settlements = settlements[['lon', 'lat', GID_level, 'population', 'type']]
+    settlements.to_csv(os.path.join(folder, 'settlements.csv'), index=False)
 
-    return print('Agglomerations layer complete')
+    return print('settlements layer complete')
 
 
 def find_nodes(country, regions):
@@ -447,14 +452,14 @@ def find_nodes(country, regions):
     threshold = country['pop_density_km2']
     settlement_size = country['settlement_size']
 
-    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations', 'tifs')
+    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'tifs')
 
     interim = []
 
     print('Working on gathering data from regional rasters')
     for idx, region in regions.iterrows():
 
-        # if not region['GID_2'] in single_region:
+        # if not region['GID_2'] == ['PER.1.1_1']:
         #     continue
 
         path = os.path.join(folder_tifs, region[GID_level] + '.tif')
@@ -514,6 +519,9 @@ def find_nodes(country, regions):
 
         nodes = nodes.drop_duplicates()
 
+        if len(nodes) == 0:
+            continue
+
         nodes.loc[(nodes['sum'] >= 20000), 'type'] = '>20k'
         nodes.loc[(nodes['sum'] <= 10000) | (nodes['sum'] < 20000), 'type'] = '10-20k'
         nodes.loc[(nodes['sum'] <= 5000) | (nodes['sum'] < 10000), 'type'] = '5-10k'
@@ -552,8 +560,8 @@ def find_largest_regional_settlement(country):
     if os.path.exists(path_output):
         return print('Largest regional settlement layer already exists')
 
-    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations')
-    path_input = os.path.join(folder, 'agglomerations' + '.shp')
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
+    path_input = os.path.join(folder, 'settlements' + '.shp')
     nodes = gpd.read_file(path_input, crs='epsg:4326')
 
     nodes = nodes.loc[nodes.reset_index().groupby([GID_level])['population'].idxmax()]
@@ -709,8 +717,8 @@ def create_regions_to_model(country):
 
     for idx, region in regions.iterrows():
 
-        if not region[GID_level] == 'PER.1.4_1': #'PER.6.8_1':
-            continue
+        # if not region[GID_level] == 'PER.6.8_1':#, 'PER.1.4_1': #'PER.6.8_1':
+        #     continue
 
         if region[GID_level] in seen:
             continue
@@ -737,66 +745,192 @@ def create_regions_to_model(country):
 
         regions_to_model.to_file(path, crs='epsg:4326')
 
-        grid = generate_grid(regions_to_model, 10000, 10000)
-
-        folder = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
-
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-
-        grid.to_file(os.path.join(folder, '{}.shp'.format(unique_regions)))
-
     return print('Completed creation of regions to model')
 
 
-def generate_grid(region, x_length, y_length):
+def create_routing_buffer_zone(country):
     """
-    Generate a spatial grid of nxn meters for the chosen shape.
+    Create a routing buffer zone between the major settlements that need connecting.
+    A minimum spanning tree is fitted between the desired settlements, with a buffer
+    and union consequently added. This provides a routing zone.
 
     """
-    region.crs = "epsg:4326"
-    country_outline = region.to_crs("epsg:3857")
+    iso3 = country['iso3']
 
-    xmin, ymin, xmax, ymax = country_outline.total_bounds
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'buffer_routing_zones')
+    folder_nodes = os.path.join(folder, 'nodes')
+    folder_edges = os.path.join(folder, 'edges')
 
-    #10km sides, leading to 100km^2 area
-    length = x_length #1e5
-    wide = y_length #1e5
+    if not os.path.exists(folder_nodes):
+        os.makedirs(folder_nodes)
 
-    cols = list(range(int(np.floor(xmin)), int(np.ceil(xmax + wide)), int(wide)))
-    rows = list(range(int(np.floor(ymin)), int(np.ceil(ymax + length)), int(length)))
-    rows.reverse()
+    if not os.path.exists(folder_edges):
+        os.makedirs(folder_edges)
 
-    polygons = []
-    for x in cols:
-        for y in rows:
-            polygons.append( Polygon([(x,y), (x+wide, y), (x+wide, y-length), (x, y-length)]))
+    filename = 'settlements.shp'
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', filename)
+    settlements = gpd.read_file(path, crs='epsg:4326')
 
-    #create grid as geopandas dataframe
-    grid = gpd.GeoDataFrame({'geometry': polygons}, crs='epsg:3857')
+    paths = glob.glob(os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions' + '/*.shp'))
 
-    #add grid id column and copy
-    grid['id'] = grid.index
+    for path in paths:
 
-    #copy dataframe and convert to centroids
-    centroids = grid.copy()
-    centroids['geometry'] = centroids['geometry'].representative_point()
+        modeling_region = gpd.read_file(path, crs='epsg:4326')
 
-    #get centroids within national boundary and select just id column
-    centroids = gpd.overlay(centroids, country_outline, how='intersection')
-    centroids = centroids[['id']]
+        settlements_in_region = gpd.overlay(settlements, modeling_region, how='intersection')
 
-    #get those grid polygons which intersect with centroids
-    grid = pd.merge(grid, centroids, on='id', how='inner')
+        #export nodes
+        path_nodes = os.path.join(folder_nodes, os.path.basename(path)[:-4] + '.shp')
+        settlements_in_region.to_file(path_nodes, crs='epsg:4326')
 
-    #convert back to WGS85 and remove null geometries
-    grid.crs = "epsg:3857"
-    grid = grid.to_crs("epsg:4326")
-    grid = grid[grid.geometry.notnull()]
+        #export edges
+        path_edges = os.path.join(folder_edges, os.path.basename(path)[:-4] + '.shp')
+        fit_edges(path_nodes, path_edges)
+        edges = gpd.read_file(path_edges, crs='epsg:4326')
 
-    print('Completed grid generation process')
+        #export buffer
+        edges = edges.to_crs("epsg:3857")
+        edges = edges['geometry'].buffer(20000)
 
-    return grid
+        # edges['geometry'] = unary_union(edges)
+
+        # edges = edges.set_crs(epsg=3857, inplace=True)
+        buffer_zone = gpd.GeoDataFrame({'geometry': unary_union(edges)}, crs='epsg:3857', index=[0])
+
+        buffer_zone = buffer_zone.to_crs("epsg:4326")
+        filename = os.path.join(folder, os.path.basename(path)[:-4] + '.shp')
+
+        buffer_zone.to_file(filename)
+
+    return print('Completed routing buffer zones')
+
+
+def fit_edges(input_path, output_path):
+    """
+    Fit edges to nodes using a minimum spanning tree.
+
+    Parameters
+    ----------
+    path : string
+        Path to nodes shapefile.
+
+    """
+    folder = os.path.dirname(output_path)
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    nodes = gpd.read_file(input_path, crs='epsg:4326')
+    nodes = nodes.to_crs('epsg:3857')
+
+    all_possible_edges = []
+
+    for node1_id, node1 in nodes.iterrows():
+        for node2_id, node2 in nodes.iterrows():
+            if node1_id != node2_id:
+                geom1 = shape(node1['geometry'])
+                geom2 = shape(node2['geometry'])
+                line = LineString([geom1, geom2])
+                all_possible_edges.append({
+                    'type': 'Feature',
+                    'geometry': mapping(line),
+                    'properties':{
+                        # 'network_layer': 'core',
+                        'from': node1_id,
+                        'to':  node2_id,
+                        'length': line.length,
+                        # 'source': 'new',
+                    }
+                })
+    if len(all_possible_edges) == 0:
+        return
+
+    G = nx.Graph()
+
+    for node_id, node in enumerate(nodes):
+        G.add_node(node_id, object=node)
+
+    for edge in all_possible_edges:
+        G.add_edge(edge['properties']['from'], edge['properties']['to'],
+            object=edge, weight=edge['properties']['length'])
+
+    tree = nx.minimum_spanning_edges(G)
+
+    edges = []
+
+    for branch in tree:
+        link = branch[2]['object']
+        if link['properties']['length'] > 0:
+            edges.append(link)
+
+    edges = gpd.GeoDataFrame.from_features(edges, crs='epsg:3857')
+
+    if len(edges) > 0:
+        edges = edges.to_crs('epsg:4326')
+        edges.to_file(output_path)
+
+    return print('Completed edge fitting')
+
+
+def generate_grid(country, x_length, y_length):
+    """
+    Generate a spatial grid of nxn meters.
+
+    """
+    iso3 = country['iso3']
+
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
+
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    paths = glob.glob(os.path.join(DATA_INTERMEDIATE, iso3, 'buffer_routing_zones' + '/*.shp'))
+
+    for path in paths:
+
+        buffer_zone = gpd.read_file(path, crs='epsg:4326')
+
+        buffer_zone = buffer_zone.to_crs("epsg:3857")
+
+        xmin, ymin, xmax, ymax = buffer_zone.total_bounds
+
+        #10km sides, leading to 100km^2 area
+        length = x_length #1e5
+        wide = y_length #1e5
+
+        cols = list(range(int(np.floor(xmin)), int(np.ceil(xmax + wide)), int(wide)))
+        rows = list(range(int(np.floor(ymin)), int(np.ceil(ymax + length)), int(length)))
+        rows.reverse()
+
+        polygons = []
+        for x in cols:
+            for y in rows:
+                polygons.append( Polygon([(x,y), (x+wide, y), (x+wide, y-length), (x, y-length)]))
+
+        #create grid as geopandas dataframe
+        grid = gpd.GeoDataFrame({'geometry': polygons}, crs='epsg:3857')
+
+        #add grid id column and copy
+        grid['id'] = grid.index
+
+        #copy dataframe and convert to centroids
+        centroids = grid.copy()
+        centroids['geometry'] = centroids['geometry'].representative_point()
+
+        #get centroids within national boundary and select just id column
+        centroids = gpd.overlay(centroids, buffer_zone, how='intersection')
+        centroids = centroids[['id']]
+
+        #get those grid polygons which intersect with centroids
+        grid = pd.merge(grid, centroids, on='id', how='inner')
+
+        #convert back to WGS85 and remove null geometries
+        grid.crs = "epsg:3857"
+        grid = grid.to_crs("epsg:4326")
+        grid = grid[grid.geometry.notnull()]
+
+        grid.to_file(os.path.join(folder, os.path.basename(path)[:-4] + '.shp'))
+
+    return print('Completed grid generation process')
 
 
 def load_settlement_routing_lookup(path):
@@ -983,12 +1117,13 @@ def reproject_raster():
     return print('Completed raster reprojection')
 
 
-def process_viewsheds(country):
+def process_high_point_viewsheds(country):
     """
     Process viewsheds for all highpoints.
 
     """
     iso3 = country['iso3']
+    max_distance = 40000
 
     filename = '10S090W_20101117_gmted_med300_reprojected.tif'
     path_input = os.path.join(DATA_RAW, 'gmted', filename)
@@ -997,7 +1132,7 @@ def process_viewsheds(country):
 
     for path in paths:
 
-        path_output = os.path.join(DATA_INTERMEDIATE, iso3, 'viewsheds', os.path.basename(path)[:-4])
+        path_output = os.path.join(DATA_INTERMEDIATE, iso3, 'viewsheds_high_points', os.path.basename(path)[:-4])
 
         if not os.path.exists(path_output):
             os.makedirs(path_output)
@@ -1009,39 +1144,86 @@ def process_viewsheds(country):
 
             tile_name = point['tile']
 
-            with Session(gisdb=path_output, location="location", create_opts="EPSG:3857"):
+            viewshed(point, path_input, path_output, tile_name, max_distance)
 
-                print('parse command')
-                print(gcore.parse_command("g.gisenv", flags="s"))#, set="DEBUG=3"
+    return print('Completed viewsheds')
 
-                print('r.external')
-                # now link a GDAL supported raster file to a binary raster map layer,
-                # from any GDAL supported raster map format, with an optional title.
-                # The file is not imported but just registered as GRASS raster map.
-                gcore.run_command('r.external', input=path_input, output=tile_name, overwrite=True)
 
-                print('r.external.out')
-                #write out as geotiff
-                gcore.run_command('r.external.out', directory='viewsheds', format="GTiff")
+def viewshed(point, path_input, path_output, tile_name, max_distance):
+    """
+    Perform a viewshed using GRASS.
 
-                print('r.region')
-                #manage the settings of the current geographic region
-                gcore.run_command('g.region', raster=tile_name)
+    """
+    with Session(gisdb=path_output, location="location", create_opts="EPSG:3857"):
 
-                print('r.viewshed')
-                #for each point in the output that is NULL: No LOS
-                gcore.run_command('r.viewshed',
-                        input=tile_name,
-                        output='{}.tif'.format(tile_name),
-                        coordinate= [point['geometry'].x, point['geometry'].y], #[-8711068, -509143],#[27.5, -3.5],
-                        observer_elevation=30,
-                        target_elevation=30,
-                        memory=5000,
-                        overwrite=True,
-                        quiet=True,
-                        max_distance=40000,
-                        # verbose=True
-                )
+        print('parse command')
+        print(gcore.parse_command("g.gisenv", flags="s"))#, set="DEBUG=3"
+
+        print('r.external')
+        # now link a GDAL supported raster file to a binary raster map layer,
+        # from any GDAL supported raster map format, with an optional title.
+        # The file is not imported but just registered as GRASS raster map.
+        gcore.run_command('r.external', input=path_input, output=tile_name, overwrite=True)
+
+        print('r.external.out')
+        #write out as geotiff
+        gcore.run_command('r.external.out', directory='viewsheds', format="GTiff")
+
+        print('r.region')
+        #manage the settings of the current geographic region
+        gcore.run_command('g.region', raster=tile_name)
+
+        print('r.viewshed')
+        #for each point in the output that is NULL: No LOS
+        gcore.run_command('r.viewshed',
+                input=tile_name,
+                output='{}.tif'.format(tile_name),
+                coordinate= [point['geometry'].x, point['geometry'].y],
+                observer_elevation=30,
+                target_elevation=30,
+                memory=5000,
+                overwrite=True,
+                quiet=True,
+                max_distance=max_distance,
+                # verbose=True
+        )
+
+
+def process_settlement_viewsheds(country):
+    """
+    Process viewsheds for all highpoints.
+
+    """
+    iso3 = country['iso3']
+    max_distance = 40000
+
+    filename = '10S090W_20101117_gmted_med300_reprojected.tif'
+    path_input = os.path.join(DATA_RAW, 'gmted', filename)
+
+    path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'settlements.shp')
+    settlements = gpd.read_file(path_settlements, crs='epsg:4326')
+
+    paths = glob.glob(os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions' + '/*.shp'))[:1]
+
+    for path in paths:
+
+        modeling_region = gpd.read_file(path, crs='epsg:4326')
+
+        settlements_in_region = gpd.overlay(settlements, modeling_region, how='intersection')
+        settlements_in_region = settlements_in_region.to_crs('epsg:3857')
+
+        path_output = os.path.join(DATA_INTERMEDIATE, iso3, 'viewsheds_settlements', os.path.basename(path)[:-4])
+
+        if not os.path.exists(path_output):
+            os.makedirs(path_output)
+
+        for idx, point in settlements_in_region.iterrows():
+
+            x = point['geometry'].centroid.x
+            y = point['geometry'].centroid.y
+            settlement_name = '{}_{}'.format(x, y)
+
+            viewshed(point, path_input, path_output, settlement_name, max_distance)
 
     return print('Completed viewsheds')
 
@@ -1139,7 +1321,7 @@ if __name__ == '__main__':
 
     countries = [
         {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, #'regional_nodes_level': 3,
-            'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
+            'region': 'SSA', 'pop_density_km2': 100, 'settlement_size': 100,
             'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
     ]
@@ -1148,29 +1330,35 @@ if __name__ == '__main__':
 
         print('Working on {}'.format(country['iso3']))
 
-        # print('Processing country boundary')
-        # process_country_shapes(country)
+        print('Processing country boundary')
+        process_country_shapes(country)
 
-        # print('Processing regions')
-        # process_regions(country)
+        print('Processing regions')
+        process_regions(country)
 
-        # print('Processing settlement layer')
-        # process_settlement_layer(country)
+        print('Processing settlement layer')
+        process_settlement_layer(country)
 
-        # print('Generating agglomeration layer')
-        # generate_agglomeration_lut(country)
+        print('Generating settlement layer')
+        generate_settlement_lut(country)
 
-        # print('Find largest settlement in each region')
-        # find_largest_regional_settlement(country)
+        print('Find largest settlement in each region')
+        find_largest_regional_settlement(country)
 
-        # print('Get settlement routing paths')
-        # get_settlement_routing_paths(country)
+        print('Get settlement routing paths')
+        get_settlement_routing_paths(country)
 
-        # print('Get settlement routing lookup')
-        # get_settlement_routing_lookup(country)
+        print('Get settlement routing lookup')
+        get_settlement_routing_lookup(country)
 
-        # print('Create regions to model')
-        # create_regions_to_model(country)
+        print('Create regions to model')
+        create_regions_to_model(country)
+
+        print('Create routing buffer zone')
+        create_routing_buffer_zone(country)
+
+        # print('Generating grid')
+        # generate_grid(country, 10000, 10000)
 
         # print('Processing dem')
         # process_dem(country)
@@ -1181,10 +1369,13 @@ if __name__ == '__main__':
         # print('Reproject raster')
         # reproject_raster()
 
-        # print('Run viewsheds')
-        # process_viewsheds(country)
+        # print('Run high point viewsheds')
+        # process_high_point_viewsheds(country)
 
-        print('Processing LOS lookup')
-        export_los_lookup(country)
+        # print('Run settlement viewsheds')
+        # process_settlement_viewsheds(country)
+
+        # print('Processing LOS lookup')
+        # export_los_lookup(country)
 
     print('Preprocessing complete')
