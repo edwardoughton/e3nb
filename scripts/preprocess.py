@@ -1,26 +1,29 @@
 """
-Process agglomeration layer
+Process settlement layer
 
 """
 import os
 import configparser
 import json
-# import csv
+import math
+import glob
+import numpy as np
 import pandas as pd
 import geopandas as gpd
-# import pyproj
 from shapely.geometry import LineString, Polygon, MultiPoint, MultiPolygon, shape, mapping
 from shapely.ops import unary_union, nearest_points #transform,
-# import fiona
-# import fiona.crs
 import rasterio
+import networkx as nx
+from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.mask import mask
 from rasterstats import zonal_stats
-# import networkx as nx
-# from rtree import index
-# import numpy as np
-# import random
-# import math
+
+grass7bin = r'"C:\Program Files\GRASS GIS 7.8\grass78.bat"'
+os.environ['GRASSBIN'] = grass7bin
+os.environ['PATH'] += ';' + r"C:\Program Files\GRASS GIS 7.8\lib"
+
+from grass_session import Session
+from grass.script import core as gcore
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), 'script_config.ini'))
@@ -298,24 +301,24 @@ def exclude_small_shapes(x):
         return MultiPolygon(new_geom)
 
 
-def generate_agglomeration_lut(country):
+def generate_settlement_lut(country):
     """
-    Generate a lookup table of agglomerations.
+    Generate a lookup table of settlements.
 
     """
     iso3 = country['iso3']
     regional_level = country['regional_level']
     GID_level = 'GID_{}'.format(regional_level)
 
-    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations')
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
     if not os.path.exists(folder):
         os.makedirs(folder)
-    path_output = os.path.join(folder, 'agglomerations.shp')
+    path_output = os.path.join(folder, 'settlements.shp')
 
     if os.path.exists(path_output):
-        return print('Agglomeration processing has already completed')
+        return print('settlement processing has already completed')
 
-    print('Working on {} agglomeration lookup table'.format(iso3))
+    print('Working on {} settlement lookup table'.format(iso3))
 
     filename = 'regions_{}_{}.shp'.format(regional_level, iso3)
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
@@ -327,13 +330,13 @@ def generate_agglomeration_lut(country):
     settlements.nodata = 255
     settlements.crs = {"init": "epsg:4326"}
 
-    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations', 'tifs')
+    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'tifs')
     if not os.path.exists(folder_tifs):
         os.makedirs(folder_tifs)
 
     for idx, region in regions.iterrows():
 
-        # if not region['GID_2'] in single_region:
+        # if not region['GID_2'] == ['PER.1.1_1']: #single_region:
         #     continue
 
         bbox = region['geometry'].envelope
@@ -360,10 +363,10 @@ def generate_agglomeration_lut(country):
 
     print('Completed settlement.tif regional segmentation')
 
-    nodes, missing_nodes = find_nodes(country, regions)
+    nodes = find_nodes(country, regions)
 
-    if len(missing_nodes) > 0:
-        nodes = nodes + missing_nodes
+    # if len(missing_nodes) > 0:
+    #     nodes = nodes + missing_nodes
 
     nodes = gpd.GeoDataFrame.from_features(nodes, crs='epsg:4326')
 
@@ -371,9 +374,9 @@ def generate_agglomeration_lut(country):
     nodes = pd.concat([nodes, bool_list], axis=1)
     nodes = nodes[nodes[0] == True].drop(columns=0)
 
-    agglomerations = []
+    settlements = []
 
-    print('Identifying agglomerations')
+    print('Identifying settlements')
     for idx1, region in regions.iterrows():
 
         # if not region['GID_2'] in single_region:
@@ -383,7 +386,7 @@ def generate_agglomeration_lut(country):
         for idx2, node in nodes.iterrows():
             if node['geometry'].intersects(region['geometry']):
                 if node['sum'] > 0:
-                    agglomerations.append({
+                    settlements.append({
                         'type': 'Feature',
                         'geometry': mapping(node['geometry']),
                         'properties': {
@@ -396,7 +399,7 @@ def generate_agglomeration_lut(country):
                     })
                     seen.add(region[GID_level])
 
-    agglomerations = gpd.GeoDataFrame.from_features(
+    settlements = gpd.GeoDataFrame.from_features(
             [
                 {
                     'geometry': item['geometry'],
@@ -408,29 +411,33 @@ def generate_agglomeration_lut(country):
                         'type': item['properties']['type'],
                     }
                 }
-                for item in agglomerations
+                for item in settlements
             ],
             crs='epsg:4326'
         )
 
-    agglomerations['lon'] = round(agglomerations['geometry'].x, 5)
-    agglomerations['lat'] = round(agglomerations['geometry'].y, 5)
+    settlements['lon'] = round(settlements['geometry'].x, 5)
+    settlements['lat'] = round(settlements['geometry'].y, 5)
 
-    agglomerations = agglomerations.drop_duplicates(subset=['lon', 'lat'])
+    settlements = settlements.drop_duplicates(subset=['lon', 'lat'])
 
-    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations')
-    path_output = os.path.join(folder, 'agglomerations' + '.shp')
-    agglomerations.to_file(path_output)
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
+    path_output = os.path.join(folder, 'settlements' + '.shp')
+    settlements.to_file(path_output)
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
+
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
     path_output = os.path.join(folder, 'main_nodes' + '.shp')
-    main_nodes = agglomerations.loc[agglomerations['population'] >= 20000]
+    main_nodes = settlements.loc[settlements['population'] >= 20000]
     main_nodes.to_file(path_output)
 
-    agglomerations = agglomerations[['lon', 'lat', GID_level, 'population', 'type']]
-    agglomerations.to_csv(os.path.join(folder, 'agglomerations.csv'), index=False)
+    settlements = settlements[['lon', 'lat', GID_level, 'population', 'type']]
+    settlements.to_csv(os.path.join(folder, 'settlements.csv'), index=False)
 
-    return print('Agglomerations layer complete')
+    return print('settlements layer complete')
 
 
 def find_nodes(country, regions):
@@ -445,14 +452,14 @@ def find_nodes(country, regions):
     threshold = country['pop_density_km2']
     settlement_size = country['settlement_size']
 
-    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations', 'tifs')
+    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'tifs')
 
     interim = []
 
     print('Working on gathering data from regional rasters')
     for idx, region in regions.iterrows():
 
-        # if not region['GID_2'] in single_region:
+        # if not region['GID_2'] == ['PER.1.1_1']:
         #     continue
 
         path = os.path.join(folder_tifs, region[GID_level] + '.tif')
@@ -512,6 +519,9 @@ def find_nodes(country, regions):
 
         nodes = nodes.drop_duplicates()
 
+        if len(nodes) == 0:
+            continue
+
         nodes.loc[(nodes['sum'] >= 20000), 'type'] = '>20k'
         nodes.loc[(nodes['sum'] <= 10000) | (nodes['sum'] < 20000), 'type'] = '10-20k'
         nodes.loc[(nodes['sum'] <= 5000) | (nodes['sum'] < 10000), 'type'] = '5-10k'
@@ -550,8 +560,8 @@ def find_largest_regional_settlement(country):
     if os.path.exists(path_output):
         return print('Largest regional settlement layer already exists')
 
-    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations')
-    path_input = os.path.join(folder, 'agglomerations' + '.shp')
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
+    path_input = os.path.join(folder, 'settlements' + '.shp')
     nodes = gpd.read_file(path_input, crs='epsg:4326')
 
     nodes = nodes.loc[nodes.reset_index().groupby([GID_level])['population'].idxmax()]
@@ -572,8 +582,12 @@ def get_settlement_routing_paths(country):
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
     path_output = os.path.join(folder, 'settlement_routing.shp')
 
-    if os.path.exists(path_output):
-        return print('Settlement routing paths already exist')
+    # if os.path.exists(path_output):
+    #     return print('Settlement routing paths already exist')
+
+    # folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
+    # path_input = os.path.join(folder, 'regions_{}_{}.shp'.format(regional_level, iso3))
+    # regions = gpd.read_file(path_input, crs='epsg:4326')
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
     path_input = os.path.join(folder, 'largest_regional_settlements.shp')
@@ -603,12 +617,21 @@ def get_settlement_routing_paths(country):
                     ),
                 ])
 
+        # nearest = gpd.GeoDataFrame.from_features([{
+        #     'geometry': mapping(nearest),
+        #     'properties': {}
+        # }])
+
+        # region_main = regions[regions.geometry.map(
+        #     lambda x: x.intersects(nearest.geometry.any()))]
+
         paths.append({
             'type': 'LineString',
             'geometry': mapping(geom),
             'properties': {
                 'id': idx,
                 'source': regional_node[GID_level],
+                # 'main_node': region_main[GID_level]
             }
         })
 
@@ -622,69 +645,361 @@ def get_settlement_routing_paths(country):
         crs='epsg:4326'
     )
 
+    paths['geometry'] = paths['geometry'].buffer(0.01)
+
+    geoms = paths.geometry.unary_union
+    paths = gpd.GeoDataFrame(geometry=[geoms])
+
+    paths = paths.explode().reset_index(drop=True)
+
     paths.to_file(path_output, crs='epsg:4326')
 
     return print('Completed settlement routing paths ')
 
 
-def get_settlement_routing_lookup(country):
+# def get_settlement_routing_lookup(country):
+#     """
+#     Create settlement routing lookup.
+
+#     """
+#     iso3 = country['iso3']
+#     regional_level = country['regional_level']
+#     GID_level = 'GID_{}'.format(regional_level)
+
+#     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
+#     path_output = os.path.join(folder, 'settlement_routing_lookup.csv')
+
+#     # if os.path.exists(path_output):
+#     #     return print('Settlement routing lookup already exists')
+
+#     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
+#     path_input = os.path.join(folder, 'settlement_routing.shp')
+#     paths = gpd.read_file(path_input, crs='epsg:4326')#[:1]
+
+#     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
+#     path_input = os.path.join(folder, 'regions_{}_PER.shp'.format(regional_level))
+#     regions = gpd.read_file(path_input, crs='epsg:4326')
+
+#     seen = set()
+#     output = []
+
+#     for idx, path in paths.iterrows():
+
+#         # seen.add(path['source'])
+#         region_intersections = []
+
+#         for idx, region in regions.iterrows():
+
+#             # if not path['source'] == 'PER.17.5_1':
+#             #     continue
+
+#             if path['geometry'].intersects(region['geometry']):
+
+#                 region_intersections.append(region[GID_level])
+#                 seen.add(region[GID_level])
+
+#         output.append({
+#             # 'id': path['id'],
+#             # 'source': path['source'],
+#             'regions': region_intersections
+#             })
+
+#     for idx, region in regions.iterrows():
+#         if not region[GID_level] in list(seen):
+#             output.append({
+#                 # 'id': 'NA',
+#                 # 'source': region[GID_level],
+#                 'regions': [region[GID_level]],
+#                 })
+
+#     output = pd.DataFrame(output)
+#     output.to_csv(path_output, index=False)
+
+#     return print('Completed settlement routing lookup')
+
+
+def create_regions_to_model(country):
     """
-    Create settlement routing lookup.
+    Subset areas to model. Create a union when multiple areas are required.
+
+    """
+    iso3 = country['iso3']
+    GID_level = 'GID_{}'.format(country['regional_level'])
+
+    filename = 'regions_{}_{}.shp'.format(country['regional_level'], iso3)
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'regions', filename)
+    regions = gpd.read_file(path, crs='epsg:4326')
+    regions = regions.drop_duplicates()#[:1]
+
+    filename = 'settlement_routing.shp'
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure', filename)
+    settlement_routing = gpd.read_file(path, crs='epsg:4326')#[:5]
+
+    seen = set()
+
+    output = []
+
+    for idx, regions_to_model in settlement_routing.iterrows():
+
+        # if not regions_to_model['FID'] == 51:
+        #     continue
+
+        regions_to_model = gpd.GeoDataFrame(
+            {'geometry': unary_union(regions_to_model['geometry'])},
+            crs='epsg:4326', index=[0])
+
+        regions_to_model = regions[regions.geometry.map(
+            lambda x: x.intersects(regions_to_model.geometry.any()))]
+
+        if len(regions_to_model) == 0:
+            print('no matching')
+            continue
+
+        unique_regions = str(regions_to_model[GID_level].unique())
+        unique_regions = unique_regions.replace('[', '').replace(']', '').replace(' ', '_')
+        regions_to_model = regions_to_model.copy()
+        regions_to_model['modeled_regions'] = unique_regions
+        regions_to_model = regions_to_model.dissolve(by='modeled_regions')
+
+        output.append({
+            'geometry': regions_to_model['geometry'][0],
+            'properties': {
+                'regions': unique_regions,
+            }
+        })
+
+        for item in regions_to_model[GID_level].unique():
+            seen.add(item)
+
+    for idx, region in regions.iterrows():
+
+        # if region[GID_level] == 'PER.8.9_1':
+        #     print(region)
+
+        if not region[GID_level] in list(seen):
+
+            output.append({
+                'geometry': region['geometry'],
+                'properties': {
+                    'regions': region[GID_level],
+                }
+            })
+
+            seen.add(region[GID_level])
+
+    output = gpd.GeoDataFrame.from_features(output)
+    filename = 'modeling_regions.shp'
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions')
+
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    output.to_file(os.path.join(folder, filename), crs='epsg:4326')
+
+    return print('Completed creation of regions to model')
+
+
+def create_routing_buffer_zone(country):
+    """
+    Create a routing buffer zone between the major settlements that need connecting.
+    A minimum spanning tree is fitted between the desired settlements, with a buffer
+    and union consequently added. This provides a routing zone.
 
     """
     iso3 = country['iso3']
     regional_level = country['regional_level']
     GID_level = 'GID_{}'.format(regional_level)
 
-    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
-    path_output = os.path.join(folder, 'settlement_routing_lookup.csv')
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'buffer_routing_zones')
+    folder_nodes = os.path.join(folder, 'nodes')
+    folder_edges = os.path.join(folder, 'edges')
 
-    if os.path.exists(path_output):
-        return print('Settlement routing lookup already exists')
+    if not os.path.exists(folder_nodes):
+        os.makedirs(folder_nodes)
 
-    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
-    path_input = os.path.join(folder, 'settlement_routing.shp')
-    paths = gpd.read_file(path_input, crs='epsg:4326')#[:1]
+    if not os.path.exists(folder_edges):
+        os.makedirs(folder_edges)
 
-    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
-    path_input = os.path.join(folder, 'regions_{}_PER.shp'.format(regional_level))
-    regions = gpd.read_file(path_input, crs='epsg:4326')
+    filename = 'settlements.shp'
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', filename)
+    settlements = gpd.read_file(path, crs='epsg:4326')
 
-    seen = set()
+    filename = 'modeling_regions.shp'
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions', filename)
+    modeling_regions = gpd.read_file(path, crs='epsg:4326')#[:5]
+
+    for idx, region in modeling_regions.iterrows():
+
+        # if os.path.exists(path_edges):
+        #     continue
+
+        modeling_region = gpd.GeoDataFrame.from_features([{
+            'geometry': mapping(region['geometry']),
+            'properties': {
+                'regions': region['regions']
+            }
+        }], crs='epsg:4326')
+
+        nodes = gpd.overlay(settlements, modeling_region, how='intersection')
+
+        main_node = (nodes[nodes['population'] == nodes['population'].max()])
+
+        #export nodes
+        path_nodes = os.path.join(folder_nodes, main_node.iloc[0][GID_level] + '.shp')
+        nodes.to_file(path_nodes, crs='epsg:4326')
+
+        #export edges
+        path_edges = os.path.join(folder_edges, main_node.iloc[0][GID_level] + '.shp')
+        fit_edges(path_nodes, path_edges)
+
+        # if os.path.exists(path_edges):
+        #     edges = gpd.read_file(path_edges, crs='epsg:4326')
+
+        #     #export buffer
+        #     edges = edges.to_crs("epsg:3857")
+        #     edges = edges['geometry'].buffer(20000)
+
+        #     # edges['geometry'] = unary_union(edges)
+
+        #     # edges = edges.set_crs(epsg=3857, inplace=True)
+        #     buffer_zone = gpd.GeoDataFrame({'geometry': unary_union(edges)}, crs='epsg:3857', index=[0])
+
+        #     buffer_zone = buffer_zone.to_crs("epsg:4326")
+        #     filename = os.path.join(folder, os.path.basename(path)[:-4] + '.shp')
+
+        #     buffer_zone.to_file(filename)
+
+    return print('Completed routing buffer zones')
+
+
+def fit_edges(input_path, output_path):
+    """
+    Fit edges to nodes using a minimum spanning tree.
+
+    Parameters
+    ----------
+    path : string
+        Path to nodes shapefile.
+
+    """
+    folder = os.path.dirname(output_path)
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    nodes = gpd.read_file(input_path, crs='epsg:4326')
+    nodes = nodes.to_crs('epsg:3857')
+
+    all_possible_edges = []
+
+    for node1_id, node1 in nodes.iterrows():
+        for node2_id, node2 in nodes.iterrows():
+            if node1_id != node2_id:
+                geom1 = shape(node1['geometry'])
+                geom2 = shape(node2['geometry'])
+                line = LineString([geom1, geom2])
+                all_possible_edges.append({
+                    'type': 'Feature',
+                    'geometry': mapping(line),
+                    'properties':{
+                        # 'network_layer': 'core',
+                        'from': node1_id,
+                        'to':  node2_id,
+                        'length': line.length,
+                        # 'source': 'new',
+                    }
+                })
+    if len(all_possible_edges) == 0:
+        return
+
+    G = nx.Graph()
+
+    for node_id, node in enumerate(nodes):
+        G.add_node(node_id, object=node)
+
+    for edge in all_possible_edges:
+        G.add_edge(edge['properties']['from'], edge['properties']['to'],
+            object=edge, weight=edge['properties']['length'])
+
+    tree = nx.minimum_spanning_edges(G)
+
+    edges = []
+
+    for branch in tree:
+        link = branch[2]['object']
+        if link['properties']['length'] > 0:
+            edges.append(link)
+
+    edges = gpd.GeoDataFrame.from_features(edges, crs='epsg:3857')
+
+    if len(edges) > 0:
+        edges = edges.to_crs('epsg:4326')
+        edges.to_file(output_path)
+
+    return print('Completed edge fitting')
+
+
+def load_settlement_routing_lookup(path):
+    """
+    Load settlement routing lookup.
+
+    """
+    settlement_routing_lut = pd.read_csv(path, converters={'regions': eval})
+
+    settlement_routing_lut = settlement_routing_lut.to_dict('records')
+
     output = []
 
-    for idx, path in paths.iterrows():
+    for item in settlement_routing_lut:
+        for key, value in item.items():
+            output.append(value)
 
-        seen.add(path['source'])
-        region_intersections = []
+    return output
 
-        for idx, region in regions.iterrows():
 
-            # if not path['source'] == 'PER.17.5_1':
-            #     continue
+def get_regions_to_model(region_id, GID_level, regions, settlement_routing_lookup):
+    """
+    Return the regions to model as a geopandas dataframe.
 
-            if path['geometry'].intersects(region['geometry']):
+    """
+    region_ids_to_model = settlement_routing_lookup.get(region_id)
 
-                region_intersections.append(region[GID_level])
+    if region_ids_to_model:
 
-        output.append({
-            'id': path['id'],
-            'source': path['source'],
-            'regions': region_intersections
+        regions_to_model = regions[regions[GID_level].isin(region_ids_to_model)]
+
+        return regions_to_model
+
+    else:
+        return []
+
+
+def create_raster_tile_lookup(country):
+    """
+    Load the extents of each raster tile and place in lookup table.
+
+    """
+    iso3 = country['iso3']
+
+    folder = os.path.join(DATA_RAW, 'gmted')
+    paths = glob.glob(os.path.join(folder, '*.tif'))#[:1]
+
+    output = []
+
+    for path in paths:
+        with rasterio.open(path) as src:
+            bbox = src.bounds
+            output.append({
+                'x1': bbox[0],
+                'y1': bbox[1],
+                'x2': bbox[2],
+                'y2': bbox[3],
+                'path': path
             })
 
-    for idx, region in regions.iterrows():
-        if not region[GID_level] in list(seen):
-            output.append({
-                'id': 'NA',
-                'source': region[GID_level],
-                'regions': [region[GID_level]],
-                })
-
     output = pd.DataFrame(output)
-    output.to_csv(path_output, index=False)
+    output.to_csv(os.path.join(DATA_INTERMEDIATE, iso3, 'raster_lookup.csv'), index=False)
 
-    return print('Completed settlement routing lookup')
+    return print('Completed raster tile lookup')
 
 
 if __name__ == '__main__':
@@ -693,7 +1008,7 @@ if __name__ == '__main__':
 
     countries = [
         {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, #'regional_nodes_level': 3,
-            'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
+            'region': 'SSA', 'pop_density_km2': 100, 'settlement_size': 100,
             'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
     ]
@@ -702,23 +1017,34 @@ if __name__ == '__main__':
 
         print('Working on {}'.format(country['iso3']))
 
-        print('Processing country boundary')
-        process_country_shapes(country)
+        # print('Processing country boundary ready to export')
+        # process_country_shapes(country)
 
-        print('Processing regions')
-        process_regions(country)
+        # print('Processing regions ready to export')
+        # process_regions(country)
 
-        print('Processing settlement layer')
-        process_settlement_layer(country)
+        # print('Processing country population raster ready to export')
+        # process_settlement_layer(country)
 
-        print('Generating agglomeration layer')
-        generate_agglomeration_lut(country)
+        # print('Generating the settlement layer ready to export')
+        # generate_settlement_lut(country)
 
-        print('Find largest settlement in each region')
-        find_largest_regional_settlement(country)
+        # print('Find largest settlement in each region ready to export')
+        # find_largest_regional_settlement(country)
 
-        print('Get settlement routing paths')
-        get_settlement_routing_paths(country)
+        # print('Get settlement routing paths')
+        # get_settlement_routing_paths(country)
 
-        print('Get settlement routing lookup')
-        get_settlement_routing_lookup(country)
+        # print('Get settlement routing lookup')
+        # get_settlement_routing_lookup(country)
+
+        # print('Create regions to model')
+        # create_regions_to_model(country)
+
+        # print('Create routing buffer zone')
+        # create_routing_buffer_zone(country)
+
+        print('Generate raster tile lookup')
+        create_raster_tile_lookup(country)
+
+    print('Preprocessing complete')
