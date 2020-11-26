@@ -37,9 +37,6 @@ def run_country(country, scenarios):
     iso3 = country['iso3']
     max_distance = 40000
 
-    # filename = '10S090W_20101117_gmted_med300.tif'
-    # path_input = os.path.join(DATA_RAW, 'gmted', filename)
-
     tile_lookup = load_raster_tile_lookup(country)
 
     folder_out_shapes = os.path.join(RESULTS, iso3, 'shapes')
@@ -53,7 +50,7 @@ def run_country(country, scenarios):
         os.makedirs(folder_out_viewsheds)
 
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'buffer_routing_zones', 'edges')
-    all_paths = glob.glob(path + '/*.shp')[:1]
+    all_paths = glob.glob(path + '/*.shp')#[:1]
 
     for path in tqdm(all_paths):
 
@@ -163,7 +160,7 @@ def run_country(country, scenarios):
             output.to_file(path_nodes, crs='epsg:4326')
             fit_edges(path_nodes, path_edges)
 
-    return print('Complete')
+    return #print('Complete')
 
 
 def find_next_short_distance_routing_node(routing_structure, point_start, point_end, tile_lookup,
@@ -240,10 +237,10 @@ def check_los(path_input, point):
 
         for val in src.sample([(x, y)]):
             if np.isnan(val):
-                print('is nan: {} therefore nlos'.format(val))
+                # print('is nan: {} therefore nlos'.format(val))
                 return 'nlos'
             else:
-                print('is not nan: {} therefore los'.format(val))
+                # print('is not nan: {} therefore los'.format(val))
                 return 'los'
 
 
@@ -579,7 +576,7 @@ def fit_edges(input_path, output_path):
         edges = edges.to_crs('epsg:4326')
         edges.to_file(output_path)
 
-    return print('Completed edge fitting')
+    return #print('Completed edge fitting')
 
 
 def load_raster_tile_lookup(country):
@@ -633,16 +630,19 @@ def collect_results(country):
 
     """
     iso3 = country['iso3']
-    regional_level = country['regional_level']
-    GID_level = 'GID_{}'.format(regional_level)
 
     path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', 'settlements.shp')
     settlements = gpd.read_file(path_settlements, crs='epsg:4382')
     settlements['geometry'] = settlements['geometry'].to_crs(crs='epsg:3857')
 
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions', 'modeling_regions.shp')
+    modeling_regions = gpd.read_file(path, crs='epsg:4326')
+    modeling_regions['geometry'] = modeling_regions['geometry'].to_crs('epsg:3857')
+    modeling_regions = modeling_regions.set_crs(epsg=3857, inplace=True)
+
     path_results = os.path.join(RESULTS, iso3, 'shapes')
 
-    paths = glob.glob(os.path.join(path_results, '*nodes.shp'))#[:2]
+    paths = glob.glob(os.path.join(path_results, '*nodes.shp'))#[:1]
 
     output = []
 
@@ -659,14 +659,12 @@ def collect_results(country):
         site_cost = 150000
         network_cost = site_cost * len(network)
 
-        settlements_covered = get_settlements_covered(country, settlements, modeling_region)
+        settlements_covered = get_settlements_covered(country, settlements, modeling_region, modeling_regions)
 
         population_covered = 0
-        # regions_covered = set()
 
         for idx, item in settlements_covered.iterrows():
             population_covered += int(item['population'])
-            # regions_covered.add(item[GID_level])
 
         if population_covered > 0 :
             cost_per_pop = network_cost / population_covered
@@ -678,22 +676,26 @@ def collect_results(country):
             'population_covered': population_covered,
             'network_towers': len(network),
             'modeling_region': modeling_region,
-            # 'regions_covered': list(regions_covered),
             'network_cost': network_cost,
             'cost_per_pop': cost_per_pop,
         })
 
     output = pd.DataFrame(output)
 
-    path = os.path.join(RESULTS, iso3, 'results.csv')
+    folder = os.path.join(RESULTS, iso3)
+
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    path = os.path.join(folder, 'results.csv')
     output.to_csv(path, index=False)
 
-    return print('Completed results collection')
+    return #print('Completed results collection')
 
 
-def get_settlements_covered(country, settlements, modeling_region):
+def get_settlements_covered(country, settlements, modeling_region, modeling_regions):
     """
-    Find the settlements covered.
+    Find the settlements covered specifically within the modeling regions.
 
     """
     iso3 = country['iso3']
@@ -707,9 +709,56 @@ def get_settlements_covered(country, settlements, modeling_region):
 
     buffer_routing_zone['geometry'] = buffer_routing_zone['geometry'].buffer(10000)
 
+    buffer_routing_zone = buffer_routing_zone['geometry'].unary_union
+
+    buffer_routing_zone = gpd.GeoDataFrame({'geometry': [buffer_routing_zone]}, index=[0])
+
+    # path = os.path.join(RESULTS, iso3, 'buffer_routing_zone.shp')
+    # buffer_routing_zone.to_file(path, crs='epsg:3857')
+
+    buffer_routing_zone = buffer_routing_zone.set_crs(epsg=3857, inplace=True)
+    settlements = settlements.set_crs(epsg=3857, inplace=True)
+
     settlements_covered = gpd.overlay(settlements, buffer_routing_zone, how='intersection')
 
+    # path = os.path.join(RESULTS, iso3, 'settlements_covered_before.shp')
+    # settlements_covered.to_file(path, crs='epsg:3857')
+
+    regions_subset = get_modeling_regions(modeling_region, modeling_regions)
+
+    # path = os.path.join(RESULTS, iso3, 'modelingregions.shp')
+    # modeling_regions.to_file(path, crs='epsg:3857')
+
+    settlements_covered = gpd.overlay(settlements_covered, regions_subset, how='intersection')
+
+    # path = os.path.join(RESULTS, iso3, 'settlements_covered_after.shp')
+    # settlements_covered.to_file(path, crs='epsg:3857')
+
     return settlements_covered
+
+
+def get_modeling_regions(modeling_region, modeling_regions):
+    """
+    Return the boundaries for the regions being modeled as a gpd dataframe.
+
+    """
+    for idx, item in modeling_regions.iterrows():
+
+        regions_list = item['regions'].split('-')
+
+        all_regions = []
+
+        for region in regions_list:
+            region = region.replace("'", "")
+            all_regions.append(region)
+
+        if modeling_region in all_regions:
+            region_id = item['regions']
+            break
+
+    regions_subset = modeling_regions.loc[modeling_regions['regions'] == region_id]
+
+    return regions_subset
 
 
 if __name__ == '__main__':
@@ -717,8 +766,12 @@ if __name__ == '__main__':
     # countries = find_country_list(['Africa'])
 
     countries = [
-        {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, #'regional_nodes_level': 3,
-            'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
+        # {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, #'regional_nodes_level': 3,
+        #     'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
+        #     'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+        # },
+        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
+            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
             'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
     ]
