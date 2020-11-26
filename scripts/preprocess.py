@@ -691,8 +691,9 @@ def create_regions_to_model(country):
             print('no matching')
             continue
 
-        unique_regions = str(regions_to_model[GID_level].unique())
-        unique_regions = unique_regions.replace('[', '').replace(']', '').replace(' ', '-')
+        unique_list = regions_to_model[GID_level].unique()
+
+        unique_regions = str(unique_list).replace('[', '').replace(']', '').replace(' ', '-')
         regions_to_model = regions_to_model.copy()
         regions_to_model['modeled_regions'] = unique_regions
         regions_to_model = regions_to_model.dissolve(by='modeled_regions')
@@ -704,7 +705,7 @@ def create_regions_to_model(country):
             }
         })
 
-        for item in regions_to_model[GID_level].unique():
+        for item in unique_list:
             seen.add(item)
 
     for idx, region in regions.iterrows():
@@ -806,7 +807,7 @@ def fit_edges(input_path, output_path):
         os.makedirs(folder)
 
     nodes = gpd.read_file(input_path, crs='epsg:4326')
-    nodes = nodes.to_crs('epsg:3857')
+    nodes = nodes.to_crs('epsg:54009')
 
     all_possible_edges = []
 
@@ -848,7 +849,7 @@ def fit_edges(input_path, output_path):
         if link['properties']['length'] > 0:
             edges.append(link)
 
-    edges = gpd.GeoDataFrame.from_features(edges, crs='epsg:3857')
+    edges = gpd.GeoDataFrame.from_features(edges, crs='epsg:54009')
 
     if len(edges) > 0:
         edges = edges.to_crs('epsg:4326')
@@ -1009,7 +1010,7 @@ def get_area(modeling_region):
     Return the area in square km.
 
     """
-    project = pyproj.Transformer.from_crs('epsg:4326', 'epsg:3857', always_xy=True).transform
+    project = pyproj.Transformer.from_crs('epsg:4326', 'esri:54009', always_xy=True).transform
     new_geom = transform(project, modeling_region['geometry'])
     area_km = new_geom.area / 1e6
 
@@ -1090,42 +1091,42 @@ if __name__ == '__main__':
             'region': 'LAT', 'pop_density_km2': 100, 'settlement_size': 100,
             'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
-        # {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
-        #     'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
-        #     'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
-        # },
+        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
+            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
+            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+        },
     ]
 
     for country in countries:
 
         print('Working on {}'.format(country['iso3']))
 
-        # print('Processing country boundary ready to export')
-        # process_country_shapes(country)
+        print('Processing country boundary ready to export')
+        process_country_shapes(country)
 
-        # print('Processing regions ready to export')
-        # process_regions(country)
+        print('Processing regions ready to export')
+        process_regions(country)
 
-        # print('Processing country population raster ready to export')
-        # process_settlement_layer(country)
+        print('Processing country population raster ready to export')
+        process_settlement_layer(country)
 
-        # print('Generating the settlement layer ready to export')
-        # generate_settlement_lut(country)
+        print('Generating the settlement layer ready to export')
+        generate_settlement_lut(country)
 
-        # print('Find largest settlement in each region ready to export')
-        # find_largest_regional_settlement(country)
+        print('Find largest settlement in each region ready to export')
+        find_largest_regional_settlement(country)
 
-        # print('Get settlement routing paths')
-        # get_settlement_routing_paths(country)
+        print('Get settlement routing paths')
+        get_settlement_routing_paths(country)
 
-        # print('Create regions to model')
-        # create_regions_to_model(country)
+        print('Create regions to model')
+        create_regions_to_model(country)
 
-        # print('Create routing buffer zone')
-        # create_routing_buffer_zone(country)
+        print('Create routing buffer zone')
+        create_routing_buffer_zone(country)
 
-        # print('Generate raster tile lookup')
-        # create_raster_tile_lookup(country)
+        print('Generate raster tile lookup')
+        create_raster_tile_lookup(country)
 
         print('Create population and terrain regional lookup')
         create_pop_and_terrain_regional_lookup(country)
