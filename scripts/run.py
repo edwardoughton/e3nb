@@ -32,10 +32,18 @@ RESULTS = os.path.join(BASE_PATH, '..', 'results')
 
 def run_country(country, scenarios):
     """
+    Meta function to run for each country.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
+    scenarios : list
+        Contains the scenarios to be run.
 
     """
     iso3 = country['iso3']
-    max_distance = 40000
+    max_distance = country['max_distance']
 
     tile_lookup = load_raster_tile_lookup(country)
 
@@ -160,12 +168,38 @@ def run_country(country, scenarios):
             output.to_file(path_nodes, crs='epsg:4326')
             fit_edges(path_nodes, path_edges)
 
-    return #print('Complete')
+    return
 
 
 def find_next_short_distance_routing_node(routing_structure, point_start, point_end, tile_lookup,
     path_output, max_distance, folder_out_shapes, scenario):
     """
+    ???
+
+    Parameters
+    ---------
+    routing_structure :
+
+    point_start : tuple
+        The starting coordinates of the route.
+    point_end : tuple
+        The finishing coordinates of the route.
+    tile_lookup : dict
+        A lookup table containing raster tile boundary coordinates
+        as the keys, and the file paths as the values.
+    path_output : string
+        The directory path for the output folder.
+    max_distance : int
+        The maximum distance a path can be.
+    folder_out_shapes : string
+        The directory path for the shape output folder.
+    scenario : string
+        The scenario being modeled.
+
+    Returns
+    -------
+    new_routing_node : list
+        Coordinates of the new routing node.
 
     """
     x = point_start[0]
@@ -229,6 +263,18 @@ def check_los(path_input, point):
     """
     Find potential LOS high points.
 
+    Parameters
+    ----------
+    path_input : string
+        File path for the digital elevation raster tile.
+    point : tuple
+        Coordinate point being queried.
+
+    Returns
+    -------
+    los : string
+        The Line of Sight (los) of the path queried.
+
     """
     with rasterio.open(path_input) as src:
 
@@ -238,15 +284,43 @@ def check_los(path_input, point):
         for val in src.sample([(x, y)]):
             if np.isnan(val):
                 # print('is nan: {} therefore nlos'.format(val))
-                return 'nlos'
+                los = 'nlos'
+                return los
             else:
                 # print('is not nan: {} therefore los'.format(val))
-                return 'los'
+                los = 'los'
+                return los
 
 
-def find_next_long_distance_routing_node(routing_structure, point_start, point_end, tile_lookup,
-    path_output, max_distance, folder_out_shapes, scenario):
+def find_next_long_distance_routing_node(routing_structure, point_start, point_end,
+    tile_lookup, path_output, max_distance, folder_out_shapes, scenario):
     """
+    ???
+
+    Parameters
+    ---------
+    routing_structure :
+
+    point_start : tuple
+        The starting coordinates of the route.
+    point_end : tuple
+        The finishing coordinates of the route.
+    tile_lookup : dict
+        A lookup table containing raster tile boundary coordinates
+        as the keys, and the file paths as the values.
+    path_output : string
+        The directory path for the output folder.
+    max_distance : int
+        The maximum distance a path can be.
+    folder_out_shapes : string
+        The directory path for the shape output folder.
+    scenario : string
+        The scenario being modeled.
+
+    Returns
+    -------
+    new_routing_node : list
+        Coordinates of the new routing node.
 
     """
     x = point_start[0]
@@ -305,6 +379,27 @@ def viewshed(point, tile_lookup, path_output, tile_name, max_distance, crs):
     """
     Perform a viewshed using GRASS.
 
+    Parameters
+    ---------
+    point : tuple
+        The point being queried.
+    tile_lookup : dict
+        A lookup table containing raster tile boundary coordinates
+        as the keys, and the file paths as the values.
+    path_output : string
+        The directory path for the output folder.
+    tile_name : string
+        The name allocated to the viewshed tile.
+    max_distance : int
+        The maximum distance a path can be.
+    crs : string
+        The coordinate reference system in use.
+
+    Returns
+    -------
+    grid : dataframe
+        A geopandas dataframe containing the created grid.
+
     """
     path_input = find_correct_raster_tile(point, tile_lookup)
 
@@ -345,6 +440,19 @@ def viewshed(point, tile_lookup, path_output, tile_name, max_distance, crs):
 def generate_grid(shape_area, x_length, y_length):
     """
     Generate a spatial grid.
+
+    Parameters
+    ---------
+    shape_area :
+
+    x_length :
+
+    y_length :
+
+    Returns
+    -------
+    grid : dataframe
+        A geopandas dataframe containing the created grid.
 
     """
     xmin, ymin, xmax, ymax = shape_area.total_bounds
@@ -388,10 +496,32 @@ def generate_grid(shape_area, x_length, y_length):
 
     return grid
 
-def snap_to_equidistant_high_point(grid, path_input, shape_area, point_start, point_end,
-    folder_out_shapes):
+
+def snap_to_equidistant_high_point(grid, path_input, shape_area,
+    point_start, point_end, folder_out_shapes):
     """
     Find potential LOS high points.
+
+    Parameters
+    ----------
+    grid :
+
+    path_input :
+
+    shape_area :
+
+    point_start :tuple
+        Starting point coordinates.
+    point_end : tuple
+        Ending point coordinates.
+
+    folder_out_shapes : string
+        Directory path for output folder.
+
+    Returns
+    -------
+    furthest_point_coords : list
+        Coordinates of furthest point.
 
     """
     all_points = []
@@ -449,14 +579,33 @@ def snap_to_equidistant_high_point(grid, path_input, shape_area, point_start, po
 
     all_linestrings['length'] = all_linestrings['geometry'].length
 
-    furthest_point_geodf = (all_linestrings[all_linestrings['length'] == all_linestrings['length'].min()])
-    # furthest_point_geodf.to_file(os.path.join(folder_out_shapes, 'test.shp'), crs='epsg:3857')
-    return list(furthest_point_geodf.geometry.iloc[0].coords[1])
+    furthest_point_geodf = (
+        all_linestrings[all_linestrings['length'] == all_linestrings['length'].min()]
+    )
+
+    furthest_point_coords = list(furthest_point_geodf.geometry.iloc[0].coords[1])
+
+    return furthest_point_coords
 
 
 def snap_to_furthest_high_point(grid, path_input, shape_area, point_start):
     """
     Find potential LOS high points.
+
+    Parameters
+    ----------
+    grid :
+
+    path_input :
+
+    shape_area :
+
+    point_start :
+
+    Returns
+    -------
+    furthest_point_coords : list
+        Coordinates of furthest point.
 
     """
     all_points = []
@@ -493,8 +642,14 @@ def snap_to_furthest_high_point(grid, path_input, shape_area, point_start):
     for idx, point in all_points.iterrows():
 
         line = LineString([
-            (point_start['geometry'][0].coords[0][0], point_start['geometry'][0].coords[0][1]),
-            (point['geometry'].coords[0][0], point['geometry'].coords[0][1])
+            (
+                point_start['geometry'][0].coords[0][0],
+                point_start['geometry'][0].coords[0][1]
+            ),
+            (
+                point['geometry'].coords[0][0],
+                point['geometry'].coords[0][1]
+            )
         ])
 
         all_linestrings.append({
@@ -507,9 +662,13 @@ def snap_to_furthest_high_point(grid, path_input, shape_area, point_start):
 
     all_linestrings['length'] = all_linestrings['geometry'].length
 
-    furthest_point_geodf = (all_linestrings[all_linestrings['length'] == all_linestrings['length'].max()])
+    furthest_point_geodf = (
+        all_linestrings[all_linestrings['length'] == all_linestrings['length'].max()]
+    )
 
-    return list(furthest_point_geodf.geometry.iloc[0].coords[1])
+    furthest_point_coords = list(furthest_point_geodf.geometry.iloc[0].coords[1])
+
+    return furthest_point_coords
 
 
 def fit_edges(input_path, output_path):
@@ -518,8 +677,10 @@ def fit_edges(input_path, output_path):
 
     Parameters
     ----------
-    path : string
-        Path to nodes shapefile.
+    input_path : string
+        Path to the node shapefiles.
+    output_path : string
+        Path for writing the network edge shapefiles.
 
     """
     folder = os.path.dirname(output_path)
@@ -576,12 +737,17 @@ def fit_edges(input_path, output_path):
         edges = edges.to_crs('epsg:4326')
         edges.to_file(output_path)
 
-    return #print('Completed edge fitting')
+    return
 
 
 def load_raster_tile_lookup(country):
     """
     Load in the preprocessed raster tile lookup.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
 
     """
     iso3 = country['iso3']
@@ -603,6 +769,21 @@ def load_raster_tile_lookup(country):
 
 def find_correct_raster_tile(point, tile_lookup):
     """
+
+    Parameters
+    ----------
+    point : tuple
+        Set of coordinates for the point being queried.
+    tile_lookup : dict
+        A lookup table containing raster tile boundary coordinates
+        as the keys, and the file paths as the values.
+
+    Return
+    ------
+    output : list
+        Contains the file path to the correct raster tile. Note:
+        only the first element is returned and if there are more than
+        one paths, an error is returned.
 
     """
     output = []
@@ -627,6 +808,11 @@ def find_correct_raster_tile(point, tile_lookup):
 def collect_results(country):
     """
     Load in results.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all information for the country being modeled.
 
     """
     iso3 = country['iso3']
@@ -690,12 +876,28 @@ def collect_results(country):
     path = os.path.join(folder, 'results.csv')
     output.to_csv(path, index=False)
 
-    return #print('Completed results collection')
+    return
 
 
 def get_settlements_covered(country, settlements, modeling_region, modeling_regions):
     """
     Find the settlements covered specifically within the modeling regions.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all information for the country being modeled.
+    settlements :
+
+    modeling_region :
+
+    modeling_regions :
+
+
+    Returns
+    -------
+    settlements_covered : dataframe
+        A geopandas dataframe containing the settlements covered.
 
     """
     iso3 = country['iso3']
@@ -763,17 +965,15 @@ def get_modeling_regions(modeling_region, modeling_regions):
 
 if __name__ == '__main__':
 
-    # countries = find_country_list(['Africa'])
-
     countries = [
-        # {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, #'regional_nodes_level': 3,
-        #     'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
-        #     'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
-        # },
-        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
-            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
+        {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, 'max_distance': 40000,
+            'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
             'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
+        # {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
+        #     'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
+        #     'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+        # },
     ]
 
     scenarios = [
