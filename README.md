@@ -33,6 +33,18 @@ Alternatively, for development purposes, clone this repo and run:
     python setup.py develop
 
 
+Quick start
+===========
+
+To prepare the data for running the model, first you need to execute:
+
+    python scripts/prep.py
+
+Once all necessary processing has been carried out, the main run script can be executed:
+
+    python scripts/run.py
+
+
 Thanks for the support
 ======================
 

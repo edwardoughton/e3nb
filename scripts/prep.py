@@ -1,5 +1,10 @@
 """
-Process settlement layer
+Prepare all necessary data layers required for running the main
+model script (scripts/run.py).
+
+Written by Ed Oughton.
+
+November 2020
 
 """
 import os
@@ -35,103 +40,50 @@ DATA_INTERMEDIATE = os.path.join(BASE_PATH, 'intermediate')
 DATA_PROCESSED = os.path.join(BASE_PATH, 'processed')
 
 
-def find_country_list(continent_list):
-    """
-    This function produces country information by continent.
-
-    Parameters
-    ----------
-    continent_list : list
-        Contains the name of the desired continent, e.g. ['Africa']
-
-    Returns
-    -------
-    countries : list of dicts
-        Contains all desired country information for countries in
-        the stated continent.
-
-    """
-    print('----')
-    print('Loading all countries')
-    path = os.path.join(DATA_RAW, 'gadm36_levels_shp', 'gadm36_0.shp')
-    countries = gpd.read_file(path)
-
-    print('Adding continent information to country shapes')
-    glob_info_path = os.path.join(DATA_RAW, 'global_information.csv')
-    load_glob_info = pd.read_csv(glob_info_path, encoding = "ISO-8859-1")
-    countries = countries.merge(load_glob_info, left_on='GID_0',
-        right_on='ISO_3digit')
-
-    subset = countries.loc[countries['continent'].isin(continent_list)]
-
-    countries = []
-
-    for index, country in subset.iterrows():
-
-        if country['GID_0'] in ['LBY', 'ESH']:
-            continue
-
-        if country['GID_0'] in ['LBY', 'ESH'] :
-            regional_level =  1
-        else:
-            regional_level = 2
-
-        countries.append({
-            'country_name': country['country'],
-            'iso3': country['GID_0'],
-            'iso2': country['ISO_2digit'],
-            'regional_level': regional_level,
-        })
-
-    return countries
-
-
 def process_country_shapes(country):
     """
     Creates a single national boundary for the desired country.
 
     Parameters
     ----------
-    country : string
-        Three digit ISO country code.
+    country : dict
+        Contains all country-specific information for modeling.
 
     """
-    print('----')
-
     iso3 = country['iso3']
 
     path = os.path.join(DATA_INTERMEDIATE, iso3)
 
     if os.path.exists(os.path.join(path, 'national_outline.shp')):
-        return 'Completed national outline processing'
+        return 'Already completed national outline processing'
 
     if not os.path.exists(path):
-        print('Creating directory {}'.format(path))
+        #Creating new directory
         os.makedirs(path)
 
     shape_path = os.path.join(path, 'national_outline.shp')
 
-    print('Loading all country shapes')
+    #Loading all country shapes
     path = os.path.join(DATA_RAW, 'gadm36_levels_shp', 'gadm36_0.shp')
     countries = gpd.read_file(path)
 
-    print('Getting specific country shape for {}'.format(iso3))
+    #Getting specific country shape
     single_country = countries[countries.GID_0 == iso3]
 
-    print('Excluding small shapes')
+    #Excluding small shapes
     single_country['geometry'] = single_country.apply(
         exclude_small_shapes, axis=1)
 
-    print('Adding ISO country code and other global information')
+    #Adding ISO country code and other global information
     glob_info_path = os.path.join(DATA_RAW, 'global_information.csv')
     load_glob_info = pd.read_csv(glob_info_path, encoding = "ISO-8859-1")
     single_country = single_country.merge(
         load_glob_info,left_on='GID_0', right_on='ISO_3digit')
 
-    print('Exporting processed country shape')
+    #Exporting processed country shape
     single_country.to_file(shape_path, driver='ESRI Shapefile')
 
-    return print('Processing country shape complete')
+    return
 
 
 def process_regions(country):
@@ -141,8 +93,8 @@ def process_regions(country):
 
     Parameters
     ----------
-    country : string
-        Three digit ISO country code.
+    country : dict
+        Contains all country-specific information for modeling.
 
     """
     regions = []
@@ -159,9 +111,6 @@ def process_regions(country):
         if os.path.exists(path_processed):
             continue
 
-        print('----')
-        print('Working on {} level {}'.format(iso3, regional_level))
-
         if not os.path.exists(folder):
             os.mkdir(folder)
 
@@ -169,22 +118,20 @@ def process_regions(country):
         path_regions = os.path.join(DATA_RAW, 'gadm36_levels_shp', filename)
         regions = gpd.read_file(path_regions)
 
-        print('Subsetting {} level {}'.format(iso3, regional_level))
+        #Subsetting regions
         regions = regions[regions.GID_0 == iso3]
 
-        print('Excluding small shapes')
+        #Excluding small shapes
         regions['geometry'] = regions.apply(exclude_small_shapes, axis=1)
 
         try:
-            print('Writing global_regions.shp to file')
+            #Writing global_regions.shp to file
             regions.to_file(path_processed, driver='ESRI Shapefile')
         except:
             print('Unable to write {}'.format(filename))
             pass
 
-    print('Completed processing of regional shapes level {}'.format(level))
-
-    return print('Complete')
+    return
 
 
 def process_settlement_layer(country):
@@ -194,12 +141,11 @@ def process_settlement_layer(country):
 
     Parameters
     ----------
-    country : string
-        Three digit ISO country code.
+    country : dict
+        Contains all country-specific information for modeling.
 
     """
     iso3 = country['iso3']
-    regional_level = country['regional_level']
 
     path_settlements = os.path.join(DATA_RAW,'settlement_layer',
         'ppp_2020_1km_Aggregated.tif')
@@ -221,10 +167,7 @@ def process_settlement_layer(country):
     shape_path = os.path.join(path_country, 'settlements.tif')
 
     if os.path.exists(shape_path):
-        return print('Completed settlement layer processing')
-
-    print('----')
-    print('Working on {} level {}'.format(iso3, regional_level))
+        return print('Already processed settlement layer')
 
     bbox = country.envelope
     geo = gpd.GeoDataFrame()
@@ -248,7 +191,7 @@ def process_settlement_layer(country):
     with rasterio.open(shape_path, "w", **out_meta) as dest:
             dest.write(out_img)
 
-    return print('Completed processing of settlement layer')
+    return
 
 
 def exclude_small_shapes(x):
@@ -304,12 +247,19 @@ def exclude_small_shapes(x):
 
 def generate_settlement_lut(country):
     """
-    Generate a lookup table of settlements.
+    Generate a lookup table of all settlements over the defined
+    settlement thresholds for the country being modeled.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
 
     """
     iso3 = country['iso3']
     regional_level = country['regional_level']
     GID_level = 'GID_{}'.format(regional_level)
+    main_settlement_size = country['main_settlement_size']
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
     if not os.path.exists(folder):
@@ -317,9 +267,7 @@ def generate_settlement_lut(country):
     path_output = os.path.join(folder, 'settlements.shp')
 
     if os.path.exists(path_output):
-        return print('settlement processing has already completed')
-
-    print('Working on {} settlement lookup table'.format(iso3))
+        return print('Already processed settlement lookup table (lut)')
 
     filename = 'regions_{}_{}.shp'.format(regional_level, iso3)
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
@@ -360,8 +308,6 @@ def generate_settlement_lut(country):
 
         with rasterio.open(path_output, "w", **out_meta) as dest:
                 dest.write(out_img)
-
-    print('Completed settlement.tif regional segmentation')
 
     nodes = find_nodes(country, regions)
 
@@ -431,18 +377,29 @@ def generate_settlement_lut(country):
         os.makedirs(folder)
 
     path_output = os.path.join(folder, 'main_nodes' + '.shp')
-    main_nodes = settlements.loc[settlements['population'] >= 20000]
+    main_nodes = settlements.loc[settlements['population'] >= main_settlement_size]
     main_nodes.to_file(path_output)
 
     settlements = settlements[['lon', 'lat', GID_level, 'population', 'type']]
     settlements.to_csv(os.path.join(folder, 'settlements.csv'), index=False)
 
-    return print('settlements layer complete')
+    return
 
 
 def find_nodes(country, regions):
     """
-    Find key nodes.
+    Find key nodes in each region.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
+    regions : dataframe
+        Pandas df containing all regions for modeling.
+
+    Returns
+    -------
+    interim : list of dicts
 
     """
     iso3 = country['iso3']
@@ -549,6 +506,11 @@ def find_largest_regional_settlement(country):
     Find the largest settlement in each region as the main regional
     routing node.
 
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
+
     """
     iso3 = country['iso3']
     regional_level = country['regional_level']
@@ -558,7 +520,7 @@ def find_largest_regional_settlement(country):
     path_output = os.path.join(folder, 'largest_regional_settlements.shp')
 
     if os.path.exists(path_output):
-        return print('Largest regional settlement layer already exists')
+        return print('Already processed the largest regional settlement layer')
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
     path_input = os.path.join(folder, 'settlements' + '.shp')
@@ -567,23 +529,35 @@ def find_largest_regional_settlement(country):
     nodes = nodes.loc[nodes.reset_index().groupby([GID_level])['population'].idxmax()]
     nodes.to_file(path_output, crs='epsg:4326')
 
-    return print('Completed largest regional settlement layer')
+    return
 
 
 def get_settlement_routing_paths(country):
     """
     Create settlement routing paths and export as linestrings.
 
+    This is based on the largest regional settlement being routed
+    to the nearest major settlement, which may or may not be within
+    its own region. Any settlements routing to a major settlement from
+    a different region will later be combined into a single region
+    for modeling purposes.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
+
     """
     iso3 = country['iso3']
     regional_level = country['regional_level']
     GID_level = 'GID_{}'.format(regional_level)
+    main_settlement_size = country['main_settlement_size']
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
     path_output = os.path.join(folder, 'settlement_routing.shp')
 
     if os.path.exists(path_output):
-        return print('Settlement routing paths already exist')
+        return print('Already processed the settlement routing path layer')
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
     path_input = os.path.join(folder, 'largest_regional_settlements.shp')
@@ -597,7 +571,7 @@ def get_settlement_routing_paths(country):
 
     for idx, regional_node in regional_nodes.iterrows():
 
-        if regional_node['population'] > 20000:
+        if regional_node['population'] > main_settlement_size:
             continue
 
         nearest = nearest_points(regional_node.geometry, main_nodes.unary_union)[1]
@@ -650,12 +624,21 @@ def get_settlement_routing_paths(country):
 
     paths.to_file(path_output, crs='epsg:4326')
 
-    return print('Completed settlement routing paths ')
+    return
 
 
 def create_regions_to_model(country):
     """
-    Subset areas to model. Create a union when multiple areas are required.
+    Any settlements routing to a major settlement from a different
+    region are combined into a single region for modeling purposes.
+
+    To combine multiple regions, a union is formed. This is achieved
+    by intersecting regions with the settlement routing linestrings.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
 
     """
     iso3 = country['iso3']
@@ -733,14 +716,24 @@ def create_regions_to_model(country):
 
     output.to_file(os.path.join(folder, filename), crs='epsg:4326')
 
-    return print('Completed creation of regions to model')
+    return
 
 
 def create_routing_buffer_zone(country):
     """
-    Create a routing buffer zone between the major settlements that need connecting.
-    A minimum spanning tree is fitted between the desired settlements, with a buffer
-    and union consequently added. This provides a routing zone.
+    A routing buffer is required to reduce the size of the problem.
+
+    In the model run script, the routing buffer is use to search
+    for potential sites.
+
+    To create the routing zone, a minimum spanning tree is fitted
+    between the desired settlements, with a buffer and union consequently
+    being added.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
 
     """
     iso3 = country['iso3']
@@ -789,7 +782,7 @@ def create_routing_buffer_zone(country):
         path_edges = os.path.join(folder_edges, main_node.iloc[0][GID_level] + '.shp')
         fit_edges(path_nodes, path_edges)
 
-    return print('Completed routing buffer zones')
+    return
 
 
 def fit_edges(input_path, output_path):
@@ -798,8 +791,10 @@ def fit_edges(input_path, output_path):
 
     Parameters
     ----------
-    path : string
-        Path to nodes shapefile.
+    input_path : string
+        Path to the node shapefiles.
+    output_path : string
+        Path for writing the network edge shapefiles.
 
     """
     folder = os.path.dirname(output_path)
@@ -807,7 +802,7 @@ def fit_edges(input_path, output_path):
         os.makedirs(folder)
 
     nodes = gpd.read_file(input_path, crs='epsg:4326')
-    nodes = nodes.to_crs('epsg:54009')
+    nodes = nodes.to_crs('epsg:3857')
 
     all_possible_edges = []
 
@@ -849,53 +844,23 @@ def fit_edges(input_path, output_path):
         if link['properties']['length'] > 0:
             edges.append(link)
 
-    edges = gpd.GeoDataFrame.from_features(edges, crs='epsg:54009')
+    edges = gpd.GeoDataFrame.from_features(edges, crs='epsg:3857')
 
     if len(edges) > 0:
         edges = edges.to_crs('epsg:4326')
         edges.to_file(output_path)
 
-    return print('Completed edge fitting')
-
-
-def load_settlement_routing_lookup(path):
-    """
-    Load settlement routing lookup.
-
-    """
-    settlement_routing_lut = pd.read_csv(path, converters={'regions': eval})
-
-    settlement_routing_lut = settlement_routing_lut.to_dict('records')
-
-    output = []
-
-    for item in settlement_routing_lut:
-        for key, value in item.items():
-            output.append(value)
-
-    return output
-
-
-def get_regions_to_model(region_id, GID_level, regions, settlement_routing_lookup):
-    """
-    Return the regions to model as a geopandas dataframe.
-
-    """
-    region_ids_to_model = settlement_routing_lookup.get(region_id)
-
-    if region_ids_to_model:
-
-        regions_to_model = regions[regions[GID_level].isin(region_ids_to_model)]
-
-        return regions_to_model
-
-    else:
-        return []
+    return
 
 
 def create_raster_tile_lookup(country):
     """
     Load the extents of each raster tile and place in lookup table.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
 
     """
     iso3 = country['iso3']
@@ -927,7 +892,7 @@ def create_raster_tile_lookup(country):
     output = pd.DataFrame(output)
     output.to_csv(os.path.join(DATA_INTERMEDIATE, iso3, 'raster_lookup.csv'), index=False)
 
-    return print('Completed raster tile lookup')
+    return
 
 
 def create_pop_and_terrain_regional_lookup(country):
@@ -936,9 +901,8 @@ def create_pop_and_terrain_regional_lookup(country):
 
     Parameters
     ----------
-
-    country : string
-        Three digit ISO country code.
+    country : dict
+        Contains all country-specific information for modeling.
 
     """
     iso3 = country['iso3']
@@ -1009,6 +973,11 @@ def get_area(modeling_region):
     """
     Return the area in square km.
 
+    Parameters
+    ----------
+    modeling_region : series
+        The modeling region that we wish to find the area for.
+
     """
     project = pyproj.Transformer.from_crs('epsg:4326', 'esri:54009', always_xy=True).transform
     new_geom = transform(project, modeling_region['geometry'])
@@ -1020,6 +989,17 @@ def get_area(modeling_region):
 def load_raster_tile_lookup(country):
     """
     Load in the preprocessed raster tile lookup.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
+
+    Returns
+    -------
+    lookup : dict
+        A lookup table containing raster tile boundary coordinates
+        as the keys, and the file paths as the values.
 
     """
     iso3 = country['iso3']
@@ -1041,6 +1021,21 @@ def load_raster_tile_lookup(country):
 
 def find_correct_raster_tile(polygon, tile_lookup):
     """
+
+    Parameters
+    ----------
+    polygon : tuple
+        The bounds of the modeling region.
+    tile_lookup : dict
+        A lookup table containing raster tile boundary coordinates
+        as the keys, and the file paths as the values.
+
+    Return
+    ------
+    output : list
+        Contains the file path to the correct raster tile. Note:
+        only the first element is returned and if there are more than
+        one paths, an error is returned.
 
     """
     output = []
@@ -1066,14 +1061,22 @@ def find_correct_raster_tile(polygon, tile_lookup):
 def interdecile_range(x):
     """
     Get range between bottom 10% and top 10% of values.
+
+    This is from the Longley-Rice Irregular Terrain Model.
+
+    Code here: https://github.com/edwardoughton/itmlogic
+    Paper here: https://joss.theoj.org/papers/10.21105/joss.02266.pdf
+
     Parameters
     ----------
     x : list
         Terrain profile values.
+
     Returns
     -------
     interdecile_range : int
         The terrain irregularity parameter.
+
     """
     q90, q10 = np.percentile(x, [90, 10])
 
@@ -1084,51 +1087,51 @@ def interdecile_range(x):
 
 if __name__ == '__main__':
 
-    # countries = find_country_list(['Africa'])
-
     countries = [
         {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, #'regional_nodes_level': 3,
             'region': 'LAT', 'pop_density_km2': 100, 'settlement_size': 100,
-            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+            'main_settlement_size': 20000, 'subs_growth': 3.5, 'smartphone_growth': 5,
+            'cluster': 'C1', 'coverage_4G': 16
         },
-        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
-            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
-            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
-        },
+        # {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
+        #     'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
+        #     'main_settlement_size': 20000,  'subs_growth': 3.5, 'smartphone_growth': 5,
+        #     'cluster': 'C1', 'coverage_4G': 16
+        # },
     ]
 
     for country in countries:
 
         print('Working on {}'.format(country['iso3']))
 
-        print('Processing country boundary ready to export')
+        ### Processing country boundary ready to export
         process_country_shapes(country)
 
-        print('Processing regions ready to export')
+        ### Processing regions ready to export
         process_regions(country)
 
-        print('Processing country population raster ready to export')
+        ### Processing country population raster ready to export
         process_settlement_layer(country)
 
-        print('Generating the settlement layer ready to export')
+        ### Generating the settlement layer ready to export
         generate_settlement_lut(country)
 
-        print('Find largest settlement in each region ready to export')
+        ### Find largest settlement in each region ready to export
         find_largest_regional_settlement(country)
 
-        print('Get settlement routing paths')
+        ### Get settlement routing paths
         get_settlement_routing_paths(country)
 
-        print('Create regions to model')
+        ### Create regions to model
         create_regions_to_model(country)
 
-        print('Create routing buffer zone')
+        ### Create routing buffer zone
         create_routing_buffer_zone(country)
 
-        print('Generate raster tile lookup')
+        ### Generate raster tile lookup
         create_raster_tile_lookup(country)
 
-        print('Create population and terrain regional lookup')
+        ### Create population and terrain regional lookup
         create_pop_and_terrain_regional_lookup(country)
 
     print('Preprocessing complete')
