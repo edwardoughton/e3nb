@@ -51,6 +51,10 @@ def check_foliage_presence(routing_structure):
     Check for potential foliage
 
     """
+
+
+
+
     #implement landuse layer for probability of foliage
     return 'yes'
 
