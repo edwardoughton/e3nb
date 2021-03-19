@@ -615,7 +615,11 @@ def get_settlement_routing_paths(country):
         crs='epsg:4326'
     )
 
-    paths['geometry'] = paths['geometry'].buffer(0.01)
+    #if you don't flip to projected you get an error here
+    #even though the buffer isn't being used to explicitely measure distance
+    paths['geometry'] = paths['geometry'].to_crs('epsg:3857').buffer(0.01)
+
+    paths['geometry'] = paths['geometry'].to_crs('epsg:4326')
 
     geoms = paths.geometry.unary_union
     paths = gpd.GeoDataFrame(geometry=[geoms])

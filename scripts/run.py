@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point, LineString, Polygon, box, mapping, shape
-import random
 import rasterio
 import networkx as nx
 from tqdm import tqdm
@@ -43,26 +42,27 @@ def run_country(country, scenarios):
 
     """
     iso3 = country['iso3']
-    max_distance = country['max_distance']
 
+    #loads the preprocessed raster tile lookup.
     tile_lookup = load_raster_tile_lookup(country)
 
-    folder_out_shapes = os.path.join(RESULTS, iso3, 'shapes')
+    folder_out_shapes = os.path.join(RESULTS, iso3, 'shapes') #set output folder
 
     if not os.path.exists(folder_out_shapes):
         os.makedirs(folder_out_shapes)
 
-    folder_out_viewsheds = os.path.join(RESULTS, iso3, 'viewsheds')
+    folder_out_viewsheds = os.path.join(RESULTS, iso3, 'viewsheds') #set output folder
 
     if not os.path.exists(folder_out_viewsheds):
         os.makedirs(folder_out_viewsheds)
 
+    #get the shape paths all buffer routing zones
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'buffer_routing_zones', 'edges')
     all_paths = glob.glob(path + '/*.shp')#[:1]
 
     for path in tqdm(all_paths):
 
-        modeling_region = os.path.basename(path)[:-4]
+        modeling_region = os.path.basename(path)[:-4] #get the GID ID for the region
 
         for scenario in scenarios:
 
@@ -77,7 +77,8 @@ def run_country(country, scenarios):
 
             for idx, routing_structure in routing_structures.iterrows():
 
-                routing_structure = gpd.GeoDataFrame({'geometry': [routing_structure['geometry']]}, index=[0])
+                routing_structure = \
+                    gpd.GeoDataFrame({'geometry': [routing_structure['geometry']]}, index=[0])
                 routing_structure = routing_structure.set_crs('epsg:4326')
                 routing_structure = routing_structure.to_crs('epsg:3857')
                 routing_structure['length'] = routing_structure['geometry'].length
@@ -90,9 +91,14 @@ def run_country(country, scenarios):
                 point_start = routing_structure['geometry'][0].coords[0]
                 point_end = routing_structure['geometry'][0].coords[-1]
 
-                filename = '{}-{}-{}-{}-nodes.shp'.format(modeling_region, scenario, point_start[0], point_start[1])
+                filename = '{}-{}-{}-{}-nodes.shp'.format(
+                    modeling_region, scenario, point_start[0], point_start[1])
+
                 path_nodes = os.path.join(folder_out_shapes, filename)
-                filename = '{}-{}-{}-{}-edges.shp'.format(modeling_region, scenario, point_start[0], point_start[1])
+
+                filename = '{}-{}-{}-{}-edges.shp'.format(
+                    modeling_region, scenario, point_start[0], point_start[1])
+
                 path_edges = os.path.join(folder_out_shapes, filename)
 
                 if os.path.exists(path_edges):
@@ -103,13 +109,14 @@ def run_country(country, scenarios):
                 new_routing_nodes.append(point_start)
                 new_routing_nodes.append(point_end)
 
-                if routing_structure['length'][0] <= max_distance:
+                if routing_structure['length'][0] <= country['max_distance']:
 
                     start = point_start
                     end = point_end
 
-                    new_routing_node = find_next_short_distance_routing_node(routing_structure, start, end,
-                        tile_lookup, path_output, max_distance, folder_out_shapes, scenario)
+                    new_routing_node = find_next_short_distance_routing_node(country,
+                        start, end, tile_lookup, path_output,
+                        folder_out_shapes, scenario)
 
                     if len(new_routing_nodes) > 0:
                         new_routing_nodes.append(new_routing_node)
@@ -122,20 +129,22 @@ def run_country(country, scenarios):
 
                         line = LineString([point_start, point_end])
 
-                        if line.length < max_distance:
+                        if line.length < country['max_distance']:
                             point_end = point_start
                             new_routing_nodes.append(point_start)
                             new_routing_nodes.append(point_end)
                             continue
 
-                        intermediate_point = line.interpolate(max_distance).coords[0]
+                        intermediate_point = line.interpolate(
+                            country['max_distance']).coords[0]
 
                         start = point_start
                         end = intermediate_point
                         print('working on {} and {}'.format(start, end))
 
-                        new_routing_node = find_next_long_distance_routing_node(routing_structure, start, end,
-                            tile_lookup, path_output, max_distance, folder_out_shapes, scenario)
+                        new_routing_node = find_next_long_distance_routing_node(country,
+                            start, end, tile_lookup, path_output,
+                            folder_out_shapes, scenario)
 
                         if len(new_routing_nodes) > 0:
                             new_routing_nodes.append(new_routing_node)
@@ -171,15 +180,22 @@ def run_country(country, scenarios):
     return
 
 
-def find_next_short_distance_routing_node(routing_structure, point_start, point_end, tile_lookup,
-    path_output, max_distance, folder_out_shapes, scenario):
+def find_next_short_distance_routing_node(country, point_start,
+    point_end, tile_lookup, path_output, folder_out_shapes, scenario):
     """
-    ???
+    This function includes a number of steps:
+
+        - generates a .tif viewshed (if not already processed)
+        - checks the line of sight (los) between the start and end points
+        - creates a geojson linestring for the start and end points
+        - adds a buffer (5 km) to the linestring to create a polygon
+        - grids the area in the buffer into 1x1 km tiles
+        - snaps to the equidistant highest point
 
     Parameters
     ---------
-    routing_structure :
-
+    country : dict
+        Contains all country-specific information for modeling.
     point_start : tuple
         The starting coordinates of the route.
     point_end : tuple
@@ -189,8 +205,6 @@ def find_next_short_distance_routing_node(routing_structure, point_start, point_
         as the keys, and the file paths as the values.
     path_output : string
         The directory path for the output folder.
-    max_distance : int
-        The maximum distance a path can be.
     folder_out_shapes : string
         The directory path for the shape output folder.
     scenario : string
@@ -213,13 +227,15 @@ def find_next_short_distance_routing_node(routing_structure, point_start, point_
     point_start = point_start['geometry'][0].coords[0]
 
     file_path = os.path.join(path_output, 'location', 'PERMANENT', 'viewsheds', point_name + '.tif')
-    if not os.path.exists(file_path):
-        viewshed(point_start, tile_lookup, path_output, point_name, max_distance, 'epsg:4326')
 
+    #create the viewshed if it does not already exist
+    if not os.path.exists(file_path):
+        viewshed(point_start, tile_lookup, path_output, point_name,
+            country['max_distance'], 'epsg:4326')
+
+    #check the los matches what is required for the scenario
     if check_los(file_path, point_end) == scenario:
         return []
-    # elif check_los(file_path, point_end) == scenario:
-    #     return []
 
     point_start = Point(point_start)
     point_start = gpd.GeoDataFrame({'geometry': [point_start]}, index=[0])
@@ -237,11 +253,11 @@ def find_next_short_distance_routing_node(routing_structure, point_start, point_
         'properties': {}
     }], crs='epsg:3857')
 
-    shape_area['geometry'] = shape_area['geometry'].buffer(5000)
+    shape_area['geometry'] = shape_area['geometry'].buffer(country['buffer_size_m'])
     # filename = os.path.join(folder_out_shapes, '{}_{}_{}_poly.shp'.format(scenario, x, y))
     # shape_area.to_file(filename, crs='epsg:3857')
 
-    grid = generate_grid(shape_area, 1000, 1000)
+    grid = generate_grid(shape_area, country['grid_width_m'], country['grid_width_m'])
 
     # filename = os.path.join(folder_out_shapes, '{}_{}_{}_grid.shp'.format(scenario, x, y))
     # grid.to_file(filename, crs='epsg:3857')
@@ -249,9 +265,12 @@ def find_next_short_distance_routing_node(routing_structure, point_start, point_
     grid = grid.to_crs('epsg:4326')
 
     shape_area = shape_area.to_crs('epsg:4326')
-    path_viewsheds = os.path.join(path_output, 'location', 'PERMANENT', 'viewsheds', point_name + '.tif')
 
-    new_routing_node = snap_to_equidistant_high_point(grid, path_viewsheds, shape_area, point_start, point_end, folder_out_shapes)
+    path_viewsheds = os.path.join(path_output, 'location', 'PERMANENT', 'viewsheds',
+        point_name + '.tif')
+
+    new_routing_node = snap_to_equidistant_high_point(grid, path_viewsheds, shape_area,
+        point_start, point_end, folder_out_shapes)
 
     if len(new_routing_node) == 0:
         return []
@@ -288,19 +307,26 @@ def check_los(path_input, point):
                 return los
             else:
                 # print('is not nan: {} therefore los'.format(val))
-                los = 'los'
+                los ='clos'
                 return los
 
 
-def find_next_long_distance_routing_node(routing_structure, point_start, point_end,
-    tile_lookup, path_output, max_distance, folder_out_shapes, scenario):
+def find_next_long_distance_routing_node(country, point_start, point_end,
+    tile_lookup, path_output, folder_out_shapes, scenario):
     """
-    ???
+    This function includes a number of steps:
+
+        - generates a .tif viewshed (if not already processed)
+        - checks the line of sight (los) between the start and end points
+        - creates a geojson linestring for the start and end points
+        - adds a buffer (5 km) to the linestring to create a polygon
+        - grids the area in the buffer into 1x1 km tiles
+        - snaps to the furthest highest point
 
     Parameters
     ---------
-    routing_structure :
-
+    country : dict
+        Contains all country-specific information for modeling.
     point_start : tuple
         The starting coordinates of the route.
     point_end : tuple
@@ -310,8 +336,6 @@ def find_next_long_distance_routing_node(routing_structure, point_start, point_e
         as the keys, and the file paths as the values.
     path_output : string
         The directory path for the output folder.
-    max_distance : int
-        The maximum distance a path can be.
     folder_out_shapes : string
         The directory path for the shape output folder.
     scenario : string
@@ -333,9 +357,12 @@ def find_next_long_distance_routing_node(routing_structure, point_start, point_e
     point_start = point_start.to_crs('epsg:4326')
     point_start = point_start['geometry'][0].coords[0]
 
-    file_path = os.path.join(path_output, 'location', 'PERMANENT', 'viewsheds', point_name + '.tif')
+    file_path = os.path.join(path_output, 'location', 'PERMANENT', 'viewsheds',
+        point_name + '.tif')
+
     if not os.path.exists(file_path):
-        viewshed(point_start, tile_lookup, path_output, point_name, max_distance, 'epsg:4326')
+        viewshed(point_start, tile_lookup, path_output, point_name,
+            country['max_distance'], 'epsg:4326')
 
     point_start = Point(point_start)
     point_start = gpd.GeoDataFrame({'geometry': [point_start]}, index=[0])
@@ -353,12 +380,12 @@ def find_next_long_distance_routing_node(routing_structure, point_start, point_e
         'properties': {}
     }], crs='epsg:3857')
 
-    shape_area['geometry'] = shape_area['geometry'].buffer(5000)
+    shape_area['geometry'] = shape_area['geometry'].buffer(country['buffer_size_m'])
 
     # filename = os.path.join(folder_out_shapes, '{}_{}_{}_poly.shp'.format(scenario, x, y))
     # shape_area.to_file(filename, crs='epsg:3857')
 
-    grid = generate_grid(shape_area, 1000, 1000)
+    grid = generate_grid(shape_area, country['grid_width_m'], country['grid_width_m'])
 
     # filename = os.path.join(folder_out_shapes, '{}_{}_{}_grid.shp'.format(scenario, x, y))
     # grid.to_file(filename, crs='epsg:3857')
@@ -845,7 +872,8 @@ def collect_results(country):
         site_cost = 150000
         network_cost = site_cost * len(network)
 
-        settlements_covered = get_settlements_covered(country, settlements, modeling_region, modeling_regions)
+        settlements_covered = get_settlements_covered(country, settlements,
+            modeling_region, modeling_regions)
 
         population_covered = 0
 
@@ -966,9 +994,11 @@ def get_modeling_regions(modeling_region, modeling_regions):
 if __name__ == '__main__':
 
     countries = [
-        {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, 'max_distance': 40000,
-            'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
-            'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+        {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2,
+            'max_distance_clos': 40000, 'max_distance_nlos': 1200,
+            'buffer_size_m': 5000, 'grid_width_m': 1000, 'region': 'SSA',
+            'pop_density_km2': 25, 'settlement_size': 500, 'subs_growth': 3.5,
+            'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
         # {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
         #     'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
@@ -977,8 +1007,8 @@ if __name__ == '__main__':
     ]
 
     scenarios = [
-        'los',
-        'nlos'
+       'clos',
+        # 'nlos'
     ]
 
     for country in countries:
