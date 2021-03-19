@@ -23,6 +23,8 @@ import networkx as nx
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.mask import mask
 from rasterstats import zonal_stats, gen_zonal_stats
+import rioxarray as rxr
+import xarray
 
 grass7bin = r'"C:\Program Files\GRASS GIS 7.8\grass78.bat"'
 os.environ['GRASSBIN'] = grass7bin
@@ -1089,6 +1091,82 @@ def interdecile_range(x):
     return interdecile_range
 
 
+def process_modis(country):
+    """
+    Process the modis data by converting from .hdf to .tif.
+
+    """
+    iso3 = country['iso3']
+
+    path = os.path.join(DATA_RAW, 'modis', '.hdf')
+    all_paths = glob.glob(path + '/*.hdf')
+
+    for path in all_paths:
+
+        filename_out = os.path.basename(path)[:-4] + ".tif"
+        directory = os.path.join(DATA_INTERMEDIATE, iso3, 'modis')
+        path_out = os.path.join(directory, filename_out)
+
+        if not os.path.exists(os.path.dirname(path_out)):
+            os.makedirs(os.path.dirname(path_out))
+
+        if not os.path.exists(path_out):
+
+            print('Working on : {}'.format(path))
+
+            modis_pre = rxr.open_rasterio(path, masked=True)
+
+            modis_pre = modis_pre.rio.reproject("EPSG:4326")
+
+            modis_pre.isel(band=0).rio.to_raster(path_out, crs='epsg:4326')
+
+    return
+
+
+def create_modis_tile_lookup(country):
+    """
+    Load the extents of each modis raster tile and place in lookup table.
+
+    Parameters
+    ----------
+    country : dict
+        Contains all country-specific information for modeling.
+
+    """
+    iso3 = country['iso3']
+
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'national_outline.shp')
+    outline = gpd.read_file(path, crs='epsg:4326')
+    outline = outline['geometry'].envelope
+
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'modis')
+    paths = glob.glob(os.path.join(folder, '*.tif'))#[:1]
+
+    output = []
+
+    for path in paths:
+        with rasterio.open(path) as src:
+
+            bbox = src.bounds
+
+            bbox_shape = box(bbox[0], bbox[1], bbox[2], bbox[3])
+
+            if bbox_shape.intersects(outline[0]):
+                output.append({
+                    'x1': bbox[0],
+                    'y1': bbox[1],
+                    'x2': bbox[2],
+                    'y2': bbox[3],
+                    'path': path
+                })
+
+    output = pd.DataFrame(output)
+    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'modis_lookup.csv')
+    output.to_csv(directory, index=False)
+
+    return
+
+
 if __name__ == '__main__':
 
     countries = [
@@ -1108,34 +1186,40 @@ if __name__ == '__main__':
 
         print('Working on {}'.format(country['iso3']))
 
-        ### Processing country boundary ready to export
-        process_country_shapes(country)
+        # ### Processing country boundary ready to export
+        # process_country_shapes(country)
 
-        ### Processing regions ready to export
-        process_regions(country)
+        # ### Processing regions ready to export
+        # process_regions(country)
 
-        ### Processing country population raster ready to export
-        process_settlement_layer(country)
+        # ### Processing country population raster ready to export
+        # process_settlement_layer(country)
 
-        ### Generating the settlement layer ready to export
-        generate_settlement_lut(country)
+        # ### Generating the settlement layer ready to export
+        # generate_settlement_lut(country)
 
-        ### Find largest settlement in each region ready to export
-        find_largest_regional_settlement(country)
+        # ### Find largest settlement in each region ready to export
+        # find_largest_regional_settlement(country)
 
-        ### Get settlement routing paths
-        get_settlement_routing_paths(country)
+        # ### Get settlement routing paths
+        # get_settlement_routing_paths(country)
 
-        ### Create regions to model
-        create_regions_to_model(country)
+        # ### Create regions to model
+        # create_regions_to_model(country)
 
-        ### Create routing buffer zone
-        create_routing_buffer_zone(country)
+        # ### Create routing buffer zone
+        # create_routing_buffer_zone(country)
 
-        ### Generate raster tile lookup
-        create_raster_tile_lookup(country)
+        # ### Generate raster tile lookup
+        # create_raster_tile_lookup(country)
 
-        ### Create population and terrain regional lookup
-        create_pop_and_terrain_regional_lookup(country)
+        # ### Create population and terrain regional lookup
+        # create_pop_and_terrain_regional_lookup(country)
+
+        # ## Process the modis data
+        process_modis(country)
+
+        ## Generate modis tile lookup
+        create_modis_tile_lookup(country)
 
     print('Preprocessing complete')
