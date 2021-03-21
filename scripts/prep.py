@@ -786,12 +786,12 @@ def create_routing_buffer_zone(country):
 
         #export edges
         path_edges = os.path.join(folder_edges, main_node.iloc[0][GID_level] + '.shp')
-        fit_edges(path_nodes, path_edges)
+        fit_edges(path_nodes, path_edges, modeling_region)
 
     return
 
 
-def fit_edges(input_path, output_path):
+def fit_edges(input_path, output_path, modeling_region):
     """
     Fit edges to nodes using a minimum spanning tree.
 
@@ -801,6 +801,8 @@ def fit_edges(input_path, output_path):
         Path to the node shapefiles.
     output_path : string
         Path for writing the network edge shapefiles.
+    modeling_region : geojson
+        The modeling region being assessed.
 
     """
     folder = os.path.dirname(output_path)
@@ -827,6 +829,7 @@ def fit_edges(input_path, output_path):
                         'to':  node2_id,
                         'length': line.length,
                         # 'source': 'new',
+                        'regions': modeling_region['regions'].iloc()[0],
                     }
                 })
     if len(all_possible_edges) == 0:
@@ -1099,7 +1102,7 @@ def process_modis(country):
     iso3 = country['iso3']
 
     path = os.path.join(DATA_RAW, 'modis', '.hdf')
-    all_paths = glob.glob(path + '/*.hdf')
+    all_paths = glob.glob(path + '/*.hdf')[:1]
 
     for path in all_paths:
 
@@ -1118,9 +1121,9 @@ def process_modis(country):
 
             modis_pre = modis_pre.rio.reproject("EPSG:4326")
 
-            modis_pre.isel(band=0).rio.to_raster(path_out, crs='epsg:4326')
+            modis_pre.Percent_Tree_Cover.rio.to_raster(path_out, crs='epsg:4326')
 
-    return
+        return
 
 
 def create_modis_tile_lookup(country):
@@ -1186,37 +1189,37 @@ if __name__ == '__main__':
 
         print('Working on {}'.format(country['iso3']))
 
-        # ### Processing country boundary ready to export
-        # process_country_shapes(country)
+        ### Processing country boundary ready to export
+        process_country_shapes(country)
 
-        # ### Processing regions ready to export
-        # process_regions(country)
+        ### Processing regions ready to export
+        process_regions(country)
 
-        # ### Processing country population raster ready to export
-        # process_settlement_layer(country)
+        ### Processing country population raster ready to export
+        process_settlement_layer(country)
 
-        # ### Generating the settlement layer ready to export
-        # generate_settlement_lut(country)
+        ### Generating the settlement layer ready to export
+        generate_settlement_lut(country)
 
-        # ### Find largest settlement in each region ready to export
-        # find_largest_regional_settlement(country)
+        ### Find largest settlement in each region ready to export
+        find_largest_regional_settlement(country)
 
-        # ### Get settlement routing paths
-        # get_settlement_routing_paths(country)
+        ### Get settlement routing paths
+        get_settlement_routing_paths(country)
 
-        # ### Create regions to model
-        # create_regions_to_model(country)
+        ### Create regions to model
+        create_regions_to_model(country)
 
-        # ### Create routing buffer zone
-        # create_routing_buffer_zone(country)
+        ### Create routing buffer zone
+        create_routing_buffer_zone(country)
 
-        # ### Generate raster tile lookup
-        # create_raster_tile_lookup(country)
+        ### Generate raster tile lookup
+        create_raster_tile_lookup(country)
 
-        # ### Create population and terrain regional lookup
-        # create_pop_and_terrain_regional_lookup(country)
+        ### Create population and terrain regional lookup
+        create_pop_and_terrain_regional_lookup(country)
 
-        # ## Process the modis data
+        ## Process the modis data
         process_modis(country)
 
         ## Generate modis tile lookup
