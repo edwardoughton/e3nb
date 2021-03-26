@@ -7,9 +7,7 @@ March 2021
 
 """
 countries = [
-    {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2,
-        # 'max_distance_clos': 40000, 'max_distance_nlos': 1200,
-        'max_antenna_height': 30,
+    {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, 'max_antenna_height': 30,
         'buffer_size_m': 5000, 'grid_width_m': 1000, 'region': 'SSA',
         'pop_density_km2': 25, 'settlement_size': 500, 'subs_growth': 3.5,
         'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
@@ -59,24 +57,30 @@ fresnel_lookup = {
 
 cost_dist = {
     '0_10': {
-        'antenna_size_m': 0.6,
-        'cost_each_usd': 300,
-        'cost_for_link_usd': 600,
+        'two_0.6m_antennas_usd': 600,
+        'tower_usd': 25000,
+        'power_system': 10000,
     },
     '10_20': {
         'antenna_size_m': 0.9,
         'cost_each_usd': 600,
         'cost_for_link_usd': 1200,
+        'tower_usd': 25000,
+        'power_system': 10000,
     },
     '20_30': {
         'antenna_size_m': 1.2,
         'cost_each_usd': 1200,
         'cost_for_link_usd': 2400,
+        'tower_usd': 25000,
+        'power_system': 10000,
     },
     '30_40': {
         'antenna_size_m': 1.8,
         'cost_each_usd': 2400,
         'cost_for_link_usd': 4800,
+        'tower_usd': 25000,
+        'power_system': 10000,
     }
 }
 
