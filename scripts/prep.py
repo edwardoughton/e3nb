@@ -453,7 +453,12 @@ def find_nodes(country, regions):
         results = []
 
         for idx, node in nodes.iterrows():
-            pop = zonal_stats(node['geometry'], path, stats=['sum'])
+            pop = zonal_stats(
+                node['geometry'],
+                path,
+                nodata=0,
+                stats=['sum']
+            )
             if not pop[0]['sum'] == None and pop[0]['sum'] > settlement_size:
                 results.append({
                     'geometry': node['geometry'],
@@ -762,7 +767,7 @@ def create_routing_buffer_zone(country):
 
     filename = 'modeling_regions.shp'
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions', filename)
-    modeling_regions = gpd.read_file(path, crs='epsg:4326')#[:5]
+    modeling_regions = gpd.read_file(path, crs='epsg:4326')#[:1]
 
     for idx, region in modeling_regions.iterrows():
 
@@ -826,7 +831,15 @@ def fit_edges(input_path, output_path, modeling_region):
                     'properties':{
                         # 'network_layer': 'core',
                         'from': node1_id,
+                        # 'from_population': node1['population'],
+                        # 'from_type': node1['type'],
+                        # 'from_lon': node1['lon'],
+                        # 'from_lat': node1['lat'],
                         'to':  node2_id,
+                        # 'to_population': node2['population'],
+                        # 'to_type': node2['type'],
+                        # 'to_lon': node2['lon'],
+                        # 'to_lat': node2['lat'],
                         'length': line.length,
                         # 'source': 'new',
                         'regions': modeling_region['regions'].iloc()[0],
@@ -942,7 +955,7 @@ def create_pop_and_terrain_regional_lookup(country):
             add_stats={
                 'interdecile_range': interdecile_range
             },
-            nodata=-9999
+            nodata=0
         ))
 
         id_range_m = stats['interdecile_range']
@@ -954,7 +967,12 @@ def create_pop_and_terrain_regional_lookup(country):
             array[array <= 0] = 0
 
             population = [d['sum'] for d in zonal_stats(
-                modeling_region['geometry'], array, stats=['sum'], affine=affine)][0]
+                modeling_region['geometry'],
+                array,
+                stats=['sum'],
+                nodata=0,
+                affine=affine
+                )][0]
 
         if population > 0:
             pop_density_km2 = population / area_km
@@ -1102,7 +1120,7 @@ def process_modis(country):
     iso3 = country['iso3']
 
     path = os.path.join(DATA_RAW, 'modis', '.hdf')
-    all_paths = glob.glob(path + '/*.hdf')[:1]
+    all_paths = glob.glob(path + '/*.hdf')#[:1]
 
     for path in all_paths:
 
