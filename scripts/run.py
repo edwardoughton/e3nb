@@ -58,7 +58,7 @@ def run_country(country, scenarios):
 
     #get the shape paths all buffer routing zones
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'buffer_routing_zones', 'edges')
-    all_paths = glob.glob(path + '/*.shp')#[:1]
+    all_paths = glob.glob(path + '/*.shp')[:1]
 
     for path in tqdm(all_paths):
 
@@ -73,7 +73,7 @@ def run_country(country, scenarios):
 
             output = []
 
-            routing_structures = gpd.read_file(path, crs='epsg:4326')
+            routing_structures = gpd.read_file(path, crs='epsg:4326')[:1]
 
             for idx, routing_structure in routing_structures.iterrows():
 
@@ -101,15 +101,15 @@ def run_country(country, scenarios):
 
                 path_edges = os.path.join(folder_out_shapes, filename)
 
-                if os.path.exists(path_edges):
-                    continue
+                # if os.path.exists(path_edges):
+                #     continue
 
                 new_routing_nodes = []
 
                 new_routing_nodes.append(point_start)
                 new_routing_nodes.append(point_end)
 
-                if routing_structure['length'][0] <= country['max_distance']:
+                if routing_structure['length'][0] <= country['max_distance_clos']:
 
                     start = point_start
                     end = point_end
@@ -229,9 +229,9 @@ def find_next_short_distance_routing_node(country, point_start,
     file_path = os.path.join(path_output, 'location', 'PERMANENT', 'viewsheds', point_name + '.tif')
 
     #create the viewshed if it does not already exist
-    if not os.path.exists(file_path):
-        viewshed(point_start, tile_lookup, path_output, point_name,
-            country['max_distance'], 'epsg:4326')
+    # if not os.path.exists(file_path):
+    viewshed(point_start, tile_lookup, path_output, point_name,
+        country['max_distance_clos'], 'epsg:4326')
 
     #check the los matches what is required for the scenario
     if check_los(file_path, point_end) == scenario:
@@ -428,6 +428,7 @@ def viewshed(point, tile_lookup, path_output, tile_name, max_distance, crs):
         A geopandas dataframe containing the created grid.
 
     """
+    print(point, tile_lookup, path_output, tile_name, max_distance, crs)
     path_input = find_correct_raster_tile(point, tile_lookup)
 
     with Session(gisdb=path_output, location="location", create_opts=crs):
@@ -995,7 +996,8 @@ if __name__ == '__main__':
 
     countries = [
         {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2,
-            'max_distance_clos': 40000, 'max_distance_nlos': 1200,
+            'max_distance_clos': 40000,
+            # 'max_distance_nlos': 1200, <- not implemented yet
             'buffer_size_m': 5000, 'grid_width_m': 1000, 'region': 'SSA',
             'pop_density_km2': 25, 'settlement_size': 500, 'subs_growth': 3.5,
             'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
@@ -1017,4 +1019,4 @@ if __name__ == '__main__':
 
         run_country(country, scenarios)
 
-        collect_results(country)
+        # collect_results(country)

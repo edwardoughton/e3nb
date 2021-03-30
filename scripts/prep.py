@@ -947,7 +947,8 @@ def create_pop_and_terrain_regional_lookup(country):
 
         area_km = get_area(modeling_region)
 
-        path_input = find_correct_raster_tile(modeling_region['geometry'].bounds, tile_lookup)
+        path_input = find_correct_raster_tile(modeling_region['geometry'].bounds,
+            tile_lookup)
 
         stats = next(gen_zonal_stats(
             modeling_region['geometry'],
