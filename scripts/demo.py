@@ -402,6 +402,11 @@ if __name__ == '__main__':
 
                     path_length = item['properties']['length']
 
+                    #assumption: longer links to lower frequencies
+                    #however, not all frequencies are available in every
+                    #link location - need to caveat this
+                    #technically logic, but not necessarily a direct regulatory
+                    #reflection
                     frequency = lookup_frequency(path_length, frequency_lookup)
 
                     foliage = check_foliage_presence(item, modis_lookup)
@@ -409,6 +414,8 @@ if __name__ == '__main__':
                     clearance = fresnel_clearance_lookup(path_length, frequency,
                                             fresnel_lookup, foliage)
 
+                    #30m is cheap - built freestanding (no guide wire anchors needed)
+                    #we might was to build higher towers, all the way up to 50m
                     max_antenna_height = country['max_antenna_height']
 
                     los = generate_path_profile(
