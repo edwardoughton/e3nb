@@ -472,8 +472,6 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
     """
 
     """
-    output = []
-
     sampling_areas = sampling_areas.to_crs("epsg:3857")
 
     #set output folder
@@ -484,13 +482,16 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
 
     for idx, sampling_area in sampling_areas.iterrows():
 
+        output = []
+
         lon = sampling_area['geometry'].representative_point().coords[0][0]
         lat = sampling_area['geometry'].representative_point().coords[0][1]
         area_filename = "{}-{}".format(lon, lat)
+        print('Working on {}'.format(area_filename))
 
         ##load sampling points
         directory = os.path.join(DATA_INTERMEDIATE, iso3, 'sampling_points')
-        points = gpd.read_file(os.path.join(directory, area_filename + '.shp'))#[:5]
+        points = gpd.read_file(os.path.join(directory, area_filename + '.shp'))#[:2]
 
         ##convert to lon lat to get correct raster tile
         sampling_area_df = gpd.GeoDataFrame({'geometry': sampling_area['geometry']},
@@ -538,7 +539,7 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
                     continue
 
                 results.append({
-                    'sampling_area': filename,
+                    'sampling_area': area_filename,
                     'point_id': filename2,
                     'node_id': '{}_{}'.format(x2, y2),
                     'distance': dist,
@@ -552,9 +553,13 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
 
             output = output + results
 
-    output = pd.DataFrame(output)
-    path = os.path.join(DATA_INTERMEDIATE, iso3, 'los_lookup.csv')
-    output.to_csv(path, index=False)
+        output = pd.DataFrame(output)
+        folder = os.path.join(DATA_INTERMEDIATE, iso3, 'los_results')
+
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        output.to_csv(os.path.join(folder, area_filename + '.csv'), index=False)
 
 
 def viewshed(point, path_input, path_output, tile_name, max_distance, crs):
@@ -673,6 +678,64 @@ def find_distance(point1, point2):
     return dist
 
 
+def collect_results(iso3, sampling_areas):
+    """
+
+    """
+    sampling_areas = sampling_areas.to_crs("epsg:3857")#[:1]
+
+    output = []
+
+    #set output folder
+    for idx, sampling_area in sampling_areas.iterrows():
+
+        lon = sampling_area['geometry'].representative_point().coords[0][0]
+        lat = sampling_area['geometry'].representative_point().coords[0][1]
+        filename = "{}-{}".format(lon, lat)
+
+        directory = os.path.join(DATA_INTERMEDIATE, iso3, 'los_results')
+        data = pd.read_csv(os.path.join(directory, filename + '.csv'))
+
+        seen = set()
+
+        for i in range(10000, 50000, 10000):
+
+            clos = 0
+            nlos = 0
+
+            for idx, item in data.iterrows():
+
+                path_id = '{}_{}_{}'.format(
+                    item['point_id'],
+                    item['node_id'],
+                    item['distance']
+                )
+
+                if not path_id in seen:
+                    if item['distance'] < i:
+
+                        if item['los'] == 'clos':
+                            clos += 1
+                        elif item['los'] == 'nlos':
+                            nlos += 1
+                        else:
+                            print('Did not recognize los')
+
+                        seen.add(path_id)
+
+            output.append({
+                'decile': item['decile'],
+                'id_range_m': item['id_range_m'],
+                'distance_under': i,
+                'total_samples': clos + nlos,
+                'clos_probability': (clos / (clos + nlos)),
+                'nlos_probability': (nlos / (clos + nlos)),
+            })
+
+    output = pd.DataFrame(output)
+    folder = os.path.join(DATA_INTERMEDIATE, iso3)
+    output.to_csv(os.path.join(folder, 'los_lookup.csv'), index=False)
+
 
 if __name__ == "__main__":
 
@@ -712,3 +775,6 @@ if __name__ == "__main__":
 
         ##Process viewsheds
         generate_viewsheds(iso3, sampling_areas, sampling_points)
+
+        ## Collect results
+        collect_results(iso3, sampling_areas)
