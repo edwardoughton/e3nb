@@ -88,25 +88,25 @@ def get_terrain_lookup(region_shapes, terrain_lookup, iso3):
 
     region_shapes.to_file(os.path.join(directory, filename), crs='epsg:4326')
 
-    terrain_lookup = region_shapes[['regions', 'id_range_m']]
+    terrain_lookup = region_shapes[['regions', 'id_range_m', 'area_km2']]
 
     return terrain_lookup
 
 
-def generate_grid(iso3, tile_lookup):
+def generate_grid(iso3, tile_lookup, side_length):
     """
-    Generate a 10x10km spatial grid for the chosen country.
+    Generate a spatial grid for the chosen country.
     """
     directory = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
 
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    filename = 'grid_100x100km.shp'
+    filename = 'grid_{}_{}_km.shp'.format(side_length, side_length)
     path_output = os.path.join(directory, filename)
 
     if os.path.exists(path_output):
-        return gpd.read_file(path_output, crs='epsg:4326')
+        return
 
     filename = 'national_outline.shp'
     path = os.path.join(DATA_INTERMEDIATE, iso3, filename)
@@ -117,25 +117,18 @@ def generate_grid(iso3, tile_lookup):
 
     xmin, ymin, xmax, ymax = country_outline.total_bounds
 
-    #100km sides, leading to 100km^2 area
-    length = 1e5
-    wide = 1e5
+    polygons = manually_create_grid(
+        xmin, ymin, xmax, ymax, side_length, side_length
+    )
 
-    polygons = manually_create_grid(xmin, ymin, xmax, ymax, length, wide)
+    grid = gpd.GeoDataFrame({'geometry': polygons}, crs="epsg:3857")#[:100]
 
-    grid = gpd.GeoDataFrame({'geometry': polygons}, crs="epsg:3857")#[:20]
     intersection = gpd.overlay(grid, country_outline, how='intersection')
     intersection.crs = "epsg:3857"
     intersection = intersection.to_crs("epsg:4326")
+    intersection.to_file(path_output, crs="epsg:4326")
 
-    final_grid = query_terrain_layer(intersection, tile_lookup)
-
-    final_grid = final_grid[final_grid.geometry.notnull()]
-
-    final_grid.crs = "epsg:4326"
-    final_grid.to_file(path_output, crs="epsg:4326")
-
-    return final_grid
+    return intersection
 
 
 def manually_create_grid(xmin, ymin, xmax, ymax, length, wide):
@@ -156,36 +149,31 @@ def manually_create_grid(xmin, ymin, xmax, ymax, length, wide):
     return polygons
 
 
-def query_terrain_layer(grid, tile_lookup):
+def add_pop_data_to_grid(iso3, tile_lookup):
     """
     Query the settlement layer to get an estimated population
     for each grid square.
 
     """
-    filename = 'ppp_2020_1km_Aggregated.tif'
-    path_settlements = os.path.join(DATA_RAW, 'settlement_layer', filename)
+    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
+    filename = 'grid_1e4_1e4_w_data.shp'
+    path_output = os.path.join(directory, filename)
+
+    if os.path.exists(path_output):
+        return gpd.read_file(path_output, crs='epsg:4328')
+
+    filename = 'grid_{}_{}_km.shp'.format(1e4, 1e4)
+    path = os.path.join(directory, filename)
+    grid = gpd.read_file(path, crs='epsg:4328')
+
+    filename = 'settlements.tif'
+    path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, filename)
 
     output = []
 
     for idx, grid_tile in grid.iterrows():
 
         area_km = get_area(grid_tile)
-
-        path_input = find_tile(
-                        grid_tile['geometry'].bounds,
-                        tile_lookup
-                    )
-
-        stats = next(gen_zonal_stats(
-            grid_tile['geometry'],
-            path_input,
-            add_stats={
-                'interdecile_range': interdecile_range
-            },
-            nodata=0
-        ))
-
-        id_range_m = stats['interdecile_range']
 
         with rasterio.open(path_settlements) as src:
 
@@ -201,24 +189,32 @@ def query_terrain_layer(grid, tile_lookup):
                 affine=affine
                 )][0]
 
-        if population > 0:
-            pop_density_km2 = population / area_km
+        if not population == None:
+            if population > 0:
+                pop_density_km2 = population / area_km
+            else:
+                pop_density_km2 = 0
         else:
-            pop_density_km2 = 0
+            population = 'None'
+            pop_density_km2 = 'None'
 
         output.append({
             'type': 'Feature',
             'geometry': grid_tile['geometry'],
             'properties': {
-                'id_range_m': id_range_m,
                 'area_km2': area_km,
                 'pop_density_km2': pop_density_km2,
+                'population': population
             }
         })
 
     output = gpd.GeoDataFrame.from_features(output, crs='epsg:4326')
 
     output = output.replace([np.inf, -np.inf], np.nan)
+
+    output = output[output.geometry.notnull()]
+
+    output.to_file(path_output, crs="epsg:4326")
 
     return output
 
@@ -279,6 +275,132 @@ def find_tile(polygon, tile_lookup):
         print('Problem with find_tile: Unable to find raster path')
 
 
+def sum_to_upper_grid(iso3):
+    """
+    Go from lower grid with correct population estimates, to upper grid.
+
+    """
+    output = []
+
+    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
+    filename = 'grid_1e5_1e5_w_data.shp'
+    path_output = os.path.join(directory, filename)
+
+    if os.path.exists(path_output):
+        return gpd.read_file(path_output, crs='epsg:4328')
+
+    filename = 'grid_{}_{}_km.shp'.format(1e5, 1e5)
+    path = os.path.join(directory, filename)
+    grid_upper = gpd.read_file(path, crs='epsg:4328')
+
+    filename = 'grid_1e4_1e4_w_data.shp'#.format(1e4, 1e4)
+    path = os.path.join(directory, filename)
+    grid_lower = gpd.read_file(path, crs='epsg:4328')
+
+    for idx, upper_tile in grid_upper.iterrows():
+        population = 0
+        area_km2 = 0
+        for idx, lower_tile in grid_lower.iterrows():
+            lower_tile_point = lower_tile['geometry'].representative_point()
+            if upper_tile['geometry'].intersects(lower_tile_point):
+
+                if not lower_tile['population'] == 'None':
+                    pop = float(lower_tile['population'])
+                else:
+                    continue
+
+                if pop > 0:
+                    population += pop
+
+                if not lower_tile['area_km2'] == 'None':
+                    area = float(lower_tile['area_km2'])
+                else:
+                    continue
+
+                if area > 0:
+                    area_km2 += area
+
+        if not population == 0:
+            pop_density_km2 = population / area_km2
+        else:
+            pop_density_km2 = 0
+
+        output.append({
+            'type': 'Feature',
+            'geometry': upper_tile['geometry'],
+            'properties': {
+                'area_km2':area_km2,
+                'population': population,
+                'pop_density_km2': pop_density_km2,
+            }
+        })
+
+    output = gpd.GeoDataFrame.from_features(output, crs='epsg:4326')
+
+    output.to_file(path_output, crs="epsg:4326")
+
+    return 0
+
+
+def add_id_range_data_to_grid(iso3, tile_lookup):
+    """
+    Query the Digital Elevation Model to get an estimated interdecile
+    range for each grid square.
+
+    """
+    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
+    filename = 'grid_final.shp'
+    path_output = os.path.join(directory, filename)
+
+    if os.path.exists(path_output):
+        return gpd.read_file(path_output, crs='epsg:4328')
+
+    filename = 'grid_1e5_1e5_w_data.shp'
+    path = os.path.join(directory, filename)
+    grid = gpd.read_file(path, crs='epsg:4328')
+
+    output = []
+
+    for idx, grid_tile in grid.iterrows():
+
+        path_input = find_tile(
+            grid_tile['geometry'].bounds,
+            tile_lookup
+        )
+
+        stats = next(gen_zonal_stats(
+            grid_tile['geometry'],
+            path_input,
+            add_stats={
+                'interdecile_range': interdecile_range
+            },
+            nodata=0
+        ))
+
+        id_range_m = stats['interdecile_range']
+
+        output.append({
+            'type': 'Feature',
+            'geometry': grid_tile['geometry'],
+            'properties': {
+                'id_range_m': id_range_m,
+                'area_km2': grid_tile['area_km2'],
+                'pop_density_km2': grid_tile['pop_densit'],
+                'population': grid_tile['population'],
+            }
+        })
+
+    output = gpd.GeoDataFrame.from_features(output, crs='epsg:4326')
+
+    output = output.replace([np.inf, -np.inf], np.nan)
+
+    output = output[output.geometry.notnull()]
+
+    output.to_file(path_output, crs="epsg:4326")
+
+    return output
+
+
 def interdecile_range(x):
     """
     Get range between bottom 10% and top 10% of values.
@@ -310,6 +432,9 @@ def estimate_terrain_deciles(terrain_lookup):
     """
 
     """
+    #only select those areas over 7k
+    terrain_lookup = terrain_lookup.loc[terrain_lookup['area_km2'] > 7000].reset_index
+
     terrain_lookup['decile'] = pd.qcut(terrain_lookup['id_range_m'], 11, labels=False)
 
     terrain_lookup = terrain_lookup[['decile', 'id_range_m']]
@@ -321,10 +446,14 @@ def estimate_terrain_deciles(terrain_lookup):
     return terrain_lookup
 
 
-def select_grid_sampling_areas(grid, lut):
+def select_grid_sampling_areas(iso3, grid, lut):
     """
 
     """
+
+    if iso3 == 'IDN':
+        lut.remove(lut[0])
+
     for i in range(0, 10):
         if i == 0:
             grid.loc[(grid['id_range_m'] < lut[0]), 'decile'] = str(i)
@@ -342,17 +471,10 @@ def select_grid_sampling_areas(grid, lut):
         else:
             continue
 
-    grid = grid.loc[grid['area_km2'] > 7000] #only select those areas over 7k
-
-    data = grid[['id_range_m', 'geometry']]
-
     np.random.seed(2)
 
-    sampling_areas = grid.groupby(['decile'])['geometry'].apply(
-                        np.random.choice).reset_index()
-
-    sampling_areas = sampling_areas.merge(
-        data, left_on='geometry', right_on='geometry')
+    idx = grid.groupby(['decile'])['area_km2'].transform(max) == grid['area_km2']
+    sampling_areas = grid[idx]
 
     directory = os.path.join(DATA_INTERMEDIATE, iso3, 'sampling_area')
 
@@ -697,8 +819,11 @@ def collect_results(iso3, sampling_areas):
         data = pd.read_csv(os.path.join(directory, filename + '.csv'))
 
         seen = set()
+        interval_size = 10000
 
-        for i in range(10000, 50000, 10000):
+        for distance_lower in range(0, 40000, interval_size):
+
+            distance_upper = distance_lower + interval_size
 
             clos = 0
             nlos = 0
@@ -712,7 +837,7 @@ def collect_results(iso3, sampling_areas):
                 )
 
                 if not path_id in seen:
-                    if item['distance'] < i:
+                    if item['distance'] < distance_upper:
 
                         if item['los'] == 'clos':
                             clos += 1
@@ -726,7 +851,8 @@ def collect_results(iso3, sampling_areas):
             output.append({
                 'decile': item['decile'],
                 'id_range_m': item['id_range_m'],
-                'distance_under': i,
+                'distance_lower': distance_lower,
+                'distance_upper': distance_upper,
                 'total_samples': clos + nlos,
                 'clos_probability': (clos / (clos + nlos)),
                 'nlos_probability': (nlos / (clos + nlos)),
@@ -740,7 +866,13 @@ def collect_results(iso3, sampling_areas):
 if __name__ == "__main__":
 
     countries = [
-        "PER"
+        # "PER",
+        "IDN"
+    ]
+
+    side_lengths = [
+        1e4,
+        1e5
     ]
 
     for iso3 in countries:
@@ -764,11 +896,21 @@ if __name__ == "__main__":
         ##Get the terrain deciles
         terrain_values = estimate_terrain_deciles(terrain_lookup)
 
-        ##Generate grid
-        grid = generate_grid(iso3, tile_lookup)
+        ##Generate grids
+        generate_grid(iso3, tile_lookup, 1e4)
+        generate_grid(iso3, tile_lookup, 1e5)
+
+        ##Add data to lower grid
+        grid = add_pop_data_to_grid(iso3, tile_lookup)
+
+        ##Sum from the lower grid to the upper grid
+        grid = sum_to_upper_grid(iso3)
+
+        ##Add interdecile range to grid
+        grid = add_id_range_data_to_grid(iso3, tile_lookup)
 
         ##Get the grid tile samples
-        sampling_areas = select_grid_sampling_areas(grid, terrain_values)
+        sampling_areas = select_grid_sampling_areas(iso3, grid, terrain_values)
 
         ##Generate the terrain lookup
         sampling_points = get_points(iso3, sampling_areas, tile_lookup)#[:1]
