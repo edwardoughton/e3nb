@@ -56,8 +56,8 @@ def process_country_shapes(country):
 
     path = os.path.join(DATA_INTERMEDIATE, iso3)
 
-    if os.path.exists(os.path.join(path, 'national_outline.shp')):
-        return 'Already completed national outline processing'
+    # if os.path.exists(os.path.join(path, 'national_outline.shp')):
+    #     return 'Already completed national outline processing'
 
     if not os.path.exists(path):
         #Creating new directory
@@ -82,10 +82,50 @@ def process_country_shapes(country):
     single_country = single_country.merge(
         load_glob_info,left_on='GID_0', right_on='ISO_3digit')
 
+    if iso3 == 'IDN': #Indonesia is so large, we just want Sumatra
+        single_country = subset(single_country)
+
     #Exporting processed country shape
     single_country.to_file(shape_path, driver='ESRI Shapefile')
 
     return
+
+
+def subset(single_country):
+    """
+    Subset just Sumatra from Indonesia.
+
+    """
+    multi_geoms = list(single_country['geometry']).copy()
+
+    areas = set()
+
+    for geom in multi_geoms: #gets area of all shapes
+        for item in list(geom):
+            areas.add(item.area)
+
+    areas = list(areas)
+    areas.sort(reverse=True)
+
+    output = []
+    interim = []
+
+    for geom in multi_geoms:
+        for item in list(geom):
+            if item.area == areas[0]: #get Sumatra and return as geopandas df
+                interim.append(item)
+            if item.area == areas[2]: #get Sumatra and return as geopandas df
+                interim.append(item)
+
+    output.append({
+        'type': 'Feature',
+        'geometry': MultiPolygon(interim),
+        'properties': {}
+    })
+
+    output =  gpd.GeoDataFrame.from_features(output, crs='epsg:4326')
+
+    return output
 
 
 def process_regions(country):
@@ -99,22 +139,27 @@ def process_regions(country):
         Contains all country-specific information for modeling.
 
     """
-    regions = []
-
     iso3 = country['iso3']
     level = country['regional_level']
+
+    regions = []
+
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
+
+    if not os.path.exists(folder):
+        os.mkdir(folder)
+
+    path = os.path.join(folder, '..', 'national_outline.shp')
+    national_outline = gpd.read_file(path, crs='epsg:4328')
 
     for regional_level in range(1, level + 1):
 
         filename = 'regions_{}_{}.shp'.format(regional_level, iso3)
-        folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
+
         path_processed = os.path.join(folder, filename)
 
-        if os.path.exists(path_processed):
-            continue
-
-        if not os.path.exists(folder):
-            os.mkdir(folder)
+        # if os.path.exists(path_processed):
+        #     continue
 
         filename = 'gadm36_{}.shp'.format(regional_level)
         path_regions = os.path.join(DATA_RAW, 'gadm36_levels_shp', filename)
@@ -123,8 +168,10 @@ def process_regions(country):
         #Subsetting regions
         regions = regions[regions.GID_0 == iso3]
 
-        #Excluding small shapes
-        regions['geometry'] = regions.apply(exclude_small_shapes, axis=1)
+        regions = gpd.overlay(regions, national_outline, how='intersection')
+
+        # # Excluding small shapes
+        # regions['geometry'] = regions.apply(exclude_small_shapes, axis=1)
 
         try:
             #Writing global_regions.shp to file
@@ -143,11 +190,12 @@ def process_settlement_layer(country):
 
     Parameters
     ----------
-    country : dict
-        Contains all country-specific information for modeling.
+    country : string
+        Three digit ISO country code.
 
     """
     iso3 = country['iso3']
+    regional_level = country['regional_level']
 
     path_settlements = os.path.join(DATA_RAW,'settlement_layer',
         'ppp_2020_1km_Aggregated.tif')
@@ -168,19 +216,20 @@ def process_settlement_layer(country):
     path_country = os.path.join(DATA_INTERMEDIATE, iso3)
     shape_path = os.path.join(path_country, 'settlements.tif')
 
-    if os.path.exists(shape_path):
-        return print('Already processed settlement layer')
+    # if os.path.exists(shape_path):
+    #     return print('Completed settlement layer processing')
+
+    # print('----')
+    # print('Working on {} level {}'.format(iso3, regional_level))
 
     bbox = country.envelope
     geo = gpd.GeoDataFrame()
-
     geo = gpd.GeoDataFrame({'geometry': bbox})
-
     coords = [json.loads(geo.to_json())['features'][0]['geometry']]
 
     #chop on coords
     out_img, out_transform = mask(settlements, coords, crop=True)
-
+    # print(out_img)
     # Copy the metadata
     out_meta = settlements.meta.copy()
 
@@ -193,7 +242,7 @@ def process_settlement_layer(country):
     with rasterio.open(shape_path, "w", **out_meta) as dest:
             dest.write(out_img)
 
-    return
+    return print('Completed processing of settlement layer')
 
 
 def exclude_small_shapes(x):
@@ -233,7 +282,7 @@ def exclude_small_shapes(x):
             threshold = 0.01
 
         elif x.geometry.area > area2:
-            threshold = 0.1
+            threshold = 0.05
         else:
             threshold = 0.001
 
@@ -929,12 +978,15 @@ def create_pop_and_terrain_regional_lookup(country):
     """
     iso3 = country['iso3']
 
-    filename = 'ppp_2020_1km_Aggregated.tif'
-    path_settlements = os.path.join(DATA_RAW, 'settlement_layer', filename)
+    path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements.tif')
 
     filename = 'modeling_regions.shp'
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions', filename)
     modeling_regions = gpd.read_file(path, crs='epsg:4326')#[:5]
+
+    # filename = 'regions_3_PER.shp'
+    # path = os.path.join(DATA_INTERMEDIATE, iso3, 'regions', filename)
+    # modeling_regions = gpd.read_file(path, crs='epsg:4326')#[:5]
 
     tile_lookup = load_raster_tile_lookup(country)
 
@@ -945,7 +997,7 @@ def create_pop_and_terrain_regional_lookup(country):
         # if not modeling_region['regions'] == 'PER.15.1_1':
         #     continue
 
-        area_km = get_area(modeling_region)
+        area_km2 = get_area(modeling_region)
 
         path_input = find_correct_raster_tile(modeling_region['geometry'].bounds,
             tile_lookup)
@@ -975,16 +1027,20 @@ def create_pop_and_terrain_regional_lookup(country):
                 affine=affine
                 )][0]
 
-        if population > 0:
-            pop_density_km2 = population / area_km
+        if not population == None:
+            if population > 0:
+                pop_density_km2 = population / area_km2
+            else:
+                pop_density_km2 = 0
         else:
+            population = 0
             pop_density_km2 = 0
 
         output.append({
             'regions': modeling_region['regions'],
             'id_range_m': id_range_m,
             'population': population,
-            'area_m': area_km,
+            'area_km2': area_km2,
             'pop_density_km2': pop_density_km2,
         })
 
@@ -1009,9 +1065,9 @@ def get_area(modeling_region):
     """
     project = pyproj.Transformer.from_crs('epsg:4326', 'esri:54009', always_xy=True).transform
     new_geom = transform(project, modeling_region['geometry'])
-    area_km = new_geom.area / 1e6
+    area_km2 = new_geom.area / 1e6
 
-    return area_km
+    return area_km2
 
 
 def load_raster_tile_lookup(country):
@@ -1192,16 +1248,16 @@ def create_modis_tile_lookup(country):
 if __name__ == '__main__':
 
     countries = [
-        {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, #'regional_nodes_level': 3,
-            'region': 'LAT', 'pop_density_km2': 100, 'settlement_size': 100,
-            'main_settlement_size': 20000, 'subs_growth': 3.5, 'smartphone_growth': 5,
-            'cluster': 'C1', 'coverage_4G': 16
-        },
-        # {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, #'regional_nodes_level': 3,
-        #     'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
-        #     'main_settlement_size': 20000,  'subs_growth': 3.5, 'smartphone_growth': 5,
+        # {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 3, #'regional_nodes_level': 3,
+        #     'region': 'LAT', 'pop_density_km2': 100, 'settlement_size': 100,
+        #     'main_settlement_size': 20000, 'subs_growth': 3.5, 'smartphone_growth': 5,
         #     'cluster': 'C1', 'coverage_4G': 16
         # },
+        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 3, #'regional_nodes_level': 3,
+            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
+            'main_settlement_size': 20000,  'subs_growth': 3.5, 'smartphone_growth': 5,
+            'cluster': 'C1', 'coverage_4G': 16
+        },
     ]
 
     for country in countries:
@@ -1235,7 +1291,7 @@ if __name__ == '__main__':
         ### Generate raster tile lookup
         create_raster_tile_lookup(country)
 
-        ### Create population and terrain regional lookup
+        # Create population and terrain regional lookup
         create_pop_and_terrain_regional_lookup(country)
 
         ## Process the modis data
