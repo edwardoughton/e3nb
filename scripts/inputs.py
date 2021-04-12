@@ -7,17 +7,32 @@ March 2021
 
 """
 countries = [
+    {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, 'max_antenna_height': 50,
+        'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 500,
+        'cluster': 'C1', 'coverage_4G': 16
+    },
     {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, 'max_antenna_height': 50,
-        'buffer_size_m': 5000, 'grid_width_m': 1000, 'region': 'SSA',
-        'pop_density_km2': 25, 'settlement_size': 500, 'subs_growth': 3.5,
-        'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+        'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
+        'cluster': 'C1', 'coverage_4G': 16
     },
 ]
 
-rain_regions = {
-    'high': 5000, #meters
-    'moderate': 10000,
-    'low': 15000
+strategies = [
+    'clos',
+    'nlos'
+]
+
+rain_region_distances = {
+    'clos': {
+        'high': 15000, #los link distance in meters
+        'moderate': 30000, #los link distance in meters
+        'low': 45000 #los link distance in meters
+    },
+    'nlos': {
+        'high': 15000, #nlos link distance in meters
+        'moderate': 10000, #nlos link distance in meters
+        'low': 15000 #nlos link distance in meters
+    },
 }
 
 frequency_lookup = {

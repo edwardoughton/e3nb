@@ -433,7 +433,7 @@ def estimate_terrain_deciles(terrain_lookup):
 
     """
     #only select those areas over 7k
-    terrain_lookup = terrain_lookup.loc[terrain_lookup['area_km2'] > 7000].reset_index
+    lookup = terrain_lookup.loc[terrain_lookup['area_km2'] > 7000].reset_index()
 
     terrain_lookup['decile'] = pd.qcut(terrain_lookup['id_range_m'], 11, labels=False)
 
@@ -660,6 +660,8 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
                 if dist < 10:
                     continue
 
+                los = check_los(file_path, (x2, y2))
+
                 results.append({
                     'sampling_area': area_filename,
                     'point_id': filename2,
@@ -667,7 +669,7 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
                     'distance': dist,
                     'id_range_m': sampling_area['id_range_m'],
                     'decile': sampling_area['decile'],
-                    'los': check_los(file_path, (x2, y2)),
+                    'los': los,
                 })
 
                 seen.add('{}_{}_{}_{}'.format(x, y, x2, y2))
@@ -768,6 +770,7 @@ def check_los(path_input, point):
         y = point[1]
 
         for val in src.sample([(x, y)]):
+
             if np.isnan(val):
                 # print('is nan: {} therefore nlos'.format(val))
                 los = 'nlos'
@@ -913,10 +916,10 @@ if __name__ == "__main__":
         sampling_areas = select_grid_sampling_areas(iso3, grid, terrain_values)
 
         ##Generate the terrain lookup
-        sampling_points = get_points(iso3, sampling_areas, tile_lookup)#[:1]
+        sampling_points = get_points(iso3, sampling_areas, tile_lookup)[:1]
 
         ##Process viewsheds
-        generate_viewsheds(iso3, sampling_areas, sampling_points)
+        generate_viewsheds(iso3, sampling_areas[:1], sampling_points)
 
         ## Collect results
         collect_results(iso3, sampling_areas)

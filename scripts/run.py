@@ -428,7 +428,6 @@ def viewshed(point, tile_lookup, path_output, tile_name, max_distance, crs):
         A geopandas dataframe containing the created grid.
 
     """
-    print(point, tile_lookup, path_output, tile_name, max_distance, crs)
     path_input = find_correct_raster_tile(point, tile_lookup)
 
     with Session(gisdb=path_output, location="location", create_opts=crs):
