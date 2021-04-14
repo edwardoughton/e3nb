@@ -7,13 +7,13 @@ March 2021
 
 """
 countries = [
-    {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, 'max_antenna_height': 50,
-        'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 500,
-        'cluster': 'C1', 'coverage_4G': 16
+    {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2, 'lowest_regional_level': 3,
+        'max_antenna_height': 50, 'region': 'SEA', 'pop_density_km2': 100,
+        'settlement_size': 500, 'cluster': 'C1', 'coverage_4G': 16
     },
-    {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, 'max_antenna_height': 50,
-        'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
-        'cluster': 'C1', 'coverage_4G': 16
+    {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, 'lowest_regional_level': 3,
+        'max_antenna_height': 50, 'region': 'SSA', 'pop_density_km2': 25,
+        'settlement_size': 500, 'cluster': 'C1', 'coverage_4G': 16
     },
 ]
 

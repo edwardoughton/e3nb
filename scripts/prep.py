@@ -140,7 +140,7 @@ def process_regions(country):
 
     """
     iso3 = country['iso3']
-    level = country['regional_level']
+    level = country['lowest_regional_level']
 
     regions = []
 
@@ -161,6 +161,8 @@ def process_regions(country):
 
         if os.path.exists(path_processed):
             continue
+
+        print('--Working on {}'.format(filename))
 
         filename = 'gadm36_{}.shp'.format(regional_level)
         path_regions = os.path.join(DATA_RAW, 'gadm36_levels_shp', filename)
@@ -1267,15 +1269,19 @@ def create_modis_tile_lookup(country):
 if __name__ == '__main__':
 
     countries = [
-        {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2,
-            'region': 'LAT', 'pop_density_km2': 100, 'settlement_size': 100,
-            'main_settlement_size': 20000, 'subs_growth': 3.5, 'smartphone_growth': 5,
-            'cluster': 'C1', 'coverage_4G': 16
+        {
+            'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2,
+            'lowest_regional_level': 3, 'region': 'LAT',
+            'pop_density_km2': 100, 'settlement_size': 100,
+            'main_settlement_size': 20000, 'subs_growth': 3.5,
+            'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
-        {'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2,
-            'region': 'SEA', 'pop_density_km2': 100, 'settlement_size': 100,
-            'main_settlement_size': 20000,  'subs_growth': 3.5, 'smartphone_growth': 5,
-            'cluster': 'C1', 'coverage_4G': 16
+        {
+            'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2,
+            'lowest_regional_level': 3, 'region': 'SEA',
+            'pop_density_km2': 100, 'settlement_size': 100,
+            'main_settlement_size': 20000,  'subs_growth': 3.5,
+            'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
     ]
 
