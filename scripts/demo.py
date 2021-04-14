@@ -15,7 +15,6 @@ import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point, box, LineString, shape
 from rasterstats import gen_zonal_stats
-from itertools import tee
 import rasterio
 
 from inputs import countries
@@ -122,6 +121,7 @@ def load_region_lookup(region_lookup, routing_structures):
 
     for item in region_lookup:
         if item['regions'] == region_ids:
+            item['names'] = item['names'].replace("'", "")
             return item
 
 
@@ -666,7 +666,7 @@ def estimate_covered_settlements(iso3, strategies, settlements):
 
             modeling_region = os.path.basename(path)[:-4] #get region GID ID
 
-            # if not modeling_region == 'IDN.22.4.9_1':
+            # if not modeling_region == 'PER.21.8_1':
             #     continue
 
             path = os.path.join(RESULTS, iso3, 'edges', strategy, modeling_region + '.shp')
@@ -695,6 +695,9 @@ def estimate_covered_settlements(iso3, strategies, settlements):
                     'lon': item['lon'],
                     'lat': item['lat'],
                 })
+
+    ##remove duplicates from list of dicts
+    output = {frozenset(item.items()) : item for item in output}.values()
 
     return output
 
@@ -762,6 +765,9 @@ def get_results(iso3, strategies, results, covered_settlements,
                 'cost_usd': cost,
             })
 
+    ##remove duplicates from list of dicts
+    output = {frozenset(item.items()) : item for item in output}.values()
+
     return output
 
 
@@ -770,6 +776,8 @@ def get_settlement_costs(strategies, aggregated_results,
     """
 
     """
+    # countries = set()
+
     output = []
 
     for item in aggregated_results:
@@ -784,6 +792,12 @@ def get_settlement_costs(strategies, aggregated_results,
         for settlement in covered_settlements:
             if modeling_region == settlement['modeling_region']:
                 output.append({
+                    # 'type': 'Feature',
+                    # 'geometry': {
+                    #     'type': 'Point',
+                    #     'coordinates': (settlement['lon'], settlement['lat'])
+                    # },
+                    # 'properties': {
                     'strategy': strategy,
                     'GID_0': settlement['GID_0'],
                     'GID_id': settlement['GID_id'],
@@ -793,10 +807,16 @@ def get_settlement_costs(strategies, aggregated_results,
                     'type': settlement['type'],
                     'id_range_m': item['id_range_m'],
                     'cost_per_pop_covered': cost_per_pop_covered,
-                    'cost_per_settlement': cost_per_pop_covered * settlement['population'],
+                    'cost_per_settlement': (cost_per_pop_covered *
+                        settlement['population']),
                     'lon': settlement['lon'],
                     'lat': settlement['lat'],
+                    # }
                 })
+                # countries.add(settlement['GID_0'])
+
+    ##remove duplicates from list of dicts
+    output = {frozenset(item.items()) : item for item in output}.values()
 
     return output
 
@@ -819,125 +839,139 @@ if __name__ == '__main__':
         regional_lookup = pd.read_csv(path)
         regional_lookup = regional_lookup.to_dict('records')
 
-        # results = []
-        # costs_by_settlement = []
+        results = []
+        costs_by_settlement = []
 
-        # for strategy in strategies:
+        for strategy in strategies:
 
-        #     print('Working on {}'.format(strategy))
+            print('Working on {}'.format(strategy))
 
-        #     modis_lookup = load_modis_tile_lookup(country)
+            modis_lookup = load_modis_tile_lookup(country)
 
+            path = os.path.join(DATA_INTERMEDIATE, iso3, 'buffer_routing_zones', 'edges')
+            all_paths = glob.glob(path + '/*.shp')#[:1]#[1:2]
+            all_paths = all_paths[::-1]
 
-        #     path = os.path.join(DATA_INTERMEDIATE, iso3, 'buffer_routing_zones', 'edges')
-        #     all_paths = glob.glob(path + '/*.shp')#[:1]#[1:2]
-        #     all_paths = all_paths[::-1]
+            for path in all_paths:
 
-        #     for path in all_paths:
+                modeling_region = os.path.basename(path)[:-4] #get region GID ID
 
-        #         modeling_region = os.path.basename(path)[:-4] #get region GID ID
+                # if not modeling_region == 'PER.21.8_1':
+                #     continue
 
-        #         # if not modeling_region == 'IDN.15.6.18_1':
-        #         #     continue
+                #set output folder
+                folder = os.path.join(RESULTS, iso3, 'viewsheds')
+                folder_out_viewsheds = os.path.join(folder, modeling_region)
+                if not os.path.exists(folder_out_viewsheds):
+                    os.makedirs(folder_out_viewsheds)
 
-        #         #set output folder
-        #         folder = os.path.join(RESULTS, iso3, 'viewsheds')
-        #         folder_out_viewsheds = os.path.join(folder, modeling_region)
-        #         if not os.path.exists(folder_out_viewsheds):
-        #             os.makedirs(folder_out_viewsheds)
+                routing_structures = gpd.read_file(path, crs='epsg:4326')#[:25]
 
-        #         routing_structures = gpd.read_file(path, crs='epsg:4326')#[:25]
+                region_info = load_region_lookup(regional_lookup, routing_structures)
 
-        #         region_info = load_region_lookup(regional_lookup, routing_structures)
+                interim_shapes = []
+                output_shapes = []
 
-        #         interim_shapes = []
-        #         output_shapes = []
+                for idx, routing_structure in routing_structures.iterrows():
 
-        #         for idx, routing_structure in routing_structures.iterrows():
+                    route = calc_paths(routing_structure, strategy, tile_lookup,
+                        folder_out_viewsheds)
 
-        #             route = calc_paths(routing_structure, strategy, tile_lookup,
-        #                 folder_out_viewsheds)
+                    if route == None or len(route) == 0:
+                        continue
 
-        #             if route == None or len(route) == 0:
-        #                 continue
+                    interim_shapes.append(route)
 
-        #             interim_shapes.append(route)
+                all_routes = find_connecting_links(iso3, interim_shapes)
 
-        #         all_routes = find_connecting_links(iso3, interim_shapes)
+                output_shapes = output_shapes + all_routes
 
-        #         output_shapes = output_shapes + all_routes
+                # seen = set()
 
-        #         for item in all_routes:
+                for item in all_routes:
 
-        #             path_length = item['properties']['length']
+                    # x1 = item['geometry'].coords[0][0]
+                    # y1 = item['geometry'].coords[0][1]
+                    # x2 = item['geometry'].coords[1][0]
+                    # y2 = item['geometry'].coords[1][1]
 
-        #             #assumption: longer links to lower frequencies
-        #             #however, not all frequencies are available in every
-        #             #link location - need to caveat this
-        #             #technically logic, but not necessarily a direct regulatory
-        #             #reflection
-        #             frequency = lookup_frequency(path_length, frequency_lookup)
+                    # name1 = "{}_{}_{}_{}".format(x1, y1, x2, y2)
+                    # name2 = "{}_{}_{}_{}".format(x2, y2, x1, y1)
 
-        #             foliage = check_foliage_presence(item, modis_lookup)
+                    # if name1 in seen or name2 in seen:
+                    #     continue
+                    # seen.add(name1)
+                    # seen.add(name2)
 
-        #             clearance = fresnel_clearance_lookup(path_length, frequency,
-        #                                     fresnel_lookup, foliage)
+                    path_length = item['properties']['length']
 
-        #             # #30m is cheap - built freestanding (no guide wire anchors needed)
-        #             # #we might was to build higher towers, all the way up to 50m
-        #             # #max_antenna_height = country['max_antenna_height']
-        #             # #all clearance heights are below 50m currently as per inputs.py
-        #             # #we add 2 meters as Tx cant be mounted at the top
-        #             antenna_height = clearance + 2
+                    #assumption: longer links to lower frequencies
+                    #however, not all frequencies are available in every
+                    #link location - need to caveat this
+                    #technically logic, but not necessarily a direct regulatory
+                    #reflection
+                    frequency = lookup_frequency(path_length, frequency_lookup)
 
-        #             costs = estimate_cost(
-        #                 path_length,
-        #                 frequency,
-        #                 cost_dist,
-        #                 cost_freq,
-        #                 antenna_height,
-        #             )
+                    foliage = check_foliage_presence(item, modis_lookup)
 
-        #             for cost in costs:
-        #                 for key, value in cost.items():
-        #                     results.append({
-        #                         'iso3': iso3,
-        #                         'strategy': strategy,
-        #                         'modeling_region': modeling_region,
-        #                         'regions': region_info['regions'],
-        #                         'names': region_info['names'],
-        #                         'population': region_info['population'],
-        #                         'area_km2': region_info['area_km2'],
-        #                         'pop_density_km2': region_info['pop_density_km2'],
-        #                         'path_length': path_length,
-        #                         'link_los': item['properties']['link_los'],
-        #                         'frequency': frequency,
-        #                         'foliage': foliage,
-        #                         'clearance': clearance,
-        #                         'antenna_height': antenna_height,
-        #                         'asset_type': key,
-        #                         'cost_usd': value,
-        #                     })
+                    clearance = fresnel_clearance_lookup(path_length, frequency,
+                                            fresnel_lookup, foliage)
 
-        #         if len(output_shapes) == 0:
-        #             continue
+                    # #30m is cheap - built freestanding (no guide wire anchors needed)
+                    # #we might was to build higher towers, all the way up to 50m
+                    # #max_antenna_height = country['max_antenna_height']
+                    # #all clearance heights are below 50m currently as per inputs.py
+                    # #we add 2 meters as Tx cant be mounted at the top
+                    antenna_height = clearance + 2
 
-        #         output_shapes = gpd.GeoDataFrame.from_features(output_shapes, crs='epsg:3857')
-        #         output_shapes = output_shapes.to_crs('epsg:4326')
+                    costs = estimate_cost(
+                        path_length,
+                        frequency,
+                        cost_dist,
+                        cost_freq,
+                        antenna_height,
+                    )
 
-        #         directory = os.path.join(RESULTS, iso3, 'edges', strategy)
-        #         if not os.path.exists(directory):
-        #             os.makedirs(directory)
-        #         filename = os.path.basename(modeling_region)
-        #         output_shapes.to_file(os.path.join(directory, filename + '.shp'))
+                    for cost in costs:
+                        for key, value in cost.items():
+                            results.append({
+                                'iso3': iso3,
+                                'strategy': strategy,
+                                'modeling_region': modeling_region,
+                                'regions': region_info['regions'],
+                                'names': region_info['names'].replace("'", ""),
+                                'population': region_info['population'],
+                                'area_km2': region_info['area_km2'],
+                                'pop_density_km2': region_info['pop_density_km2'],
+                                'path_length': path_length,
+                                'link_los': item['properties']['link_los'],
+                                'frequency': frequency,
+                                'foliage': foliage,
+                                'clearance': clearance,
+                                'antenna_height': antenna_height,
+                                'asset_type': key,
+                                'cost_usd': value,
+                            })
 
-        # ##export cost results
-        # results = pd.DataFrame(results)
-        # filename = 'cost_item_results.csv'
-        # results.to_csv(os.path.join(RESULTS, iso3, filename), index=False)
+                if len(output_shapes) == 0:
+                    continue
+
+                output_shapes = gpd.GeoDataFrame.from_features(output_shapes, crs='epsg:3857')
+                output_shapes = output_shapes.to_crs('epsg:4326')
+
+                directory = os.path.join(RESULTS, iso3, 'edges', strategy)
+                if not os.path.exists(directory):
+                    os.makedirs(directory)
+                filename = os.path.basename(modeling_region)
+                output_shapes.to_file(os.path.join(directory, filename + '.shp'))
+
+        ##export cost results
+        results = pd.DataFrame(results)
+        filename = 'cost_item_results.csv'
+        results.to_csv(os.path.join(RESULTS, iso3, filename), index=False)
 
         results = pd.read_csv(os.path.join(RESULTS, iso3, 'cost_item_results.csv'))
-        results = results.to_dict('records')
+        results = results.to_dict('records')#[:10]
 
         ##estimate covered settlements
         covered_settlements = estimate_covered_settlements(iso3, strategies, settlements)
