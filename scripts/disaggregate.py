@@ -18,8 +18,6 @@ from shapely.ops import transform
 from rasterstats import gen_zonal_stats
 import rasterio
 import pyproj
-# from rasterio.warp import calculate_default_transform, reproject, Resampling
-# from rasterio.mask import mask
 from rasterstats import zonal_stats, gen_zonal_stats
 
 CONFIG = configparser.ConfigParser()
@@ -99,52 +97,24 @@ def load_settlement_costs(iso3):
     return output
 
 
-def disaggregate(iso3, settlements, tile_lookup):
+def get_data(iso3, tile_lookup):
     """
 
     """
     output = []
 
-    path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements.tif')
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'gid_3_regional_data.csv')
 
-    filename = 'settlements.shp'
-    path = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', filename)
-    all_settlements = gpd.read_file(path, crs='epsg:4326')#[:1]
-    all_settlements['geometry'] = all_settlements['geometry'].to_crs('epsg:3857')
-    all_settlements['geometry'] = all_settlements['geometry'].buffer(10)
-    all_settlements['geometry'] = all_settlements['geometry'].to_crs('epsg:4326')
+    if os.path.exists(path):
+        return
+
+    path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements.tif')
 
     filename = 'regions_3_{}.shp'.format(iso3)
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'regions', filename)
-    regions = gpd.read_file(path, crs='epsg:4326')#[:50]
+    regions = gpd.read_file(path, crs='epsg:4326')#[:1]
 
     for idx, region in regions.iterrows():
-
-        # if not region['GID_3'] == 'PER.21.8.6_1':
-        #     continue
-
-        if region['geometry'].type == 'Polygon':
-            geo_df = gpd.GeoDataFrame({'geometry': region['geometry']},
-                index=[0], crs='epsg:4326')
-        else:
-            geo_df = gpd.GeoDataFrame({'geometry': region['geometry']},
-                crs='epsg:4326')
-
-        region_settlements = gpd.overlay(all_settlements, geo_df, how='intersection')
-
-        # all_settlements_pop = 0
-        # for idx, item in region_settlements.iterrows():
-        #     geom = item['geometry'].representative_point()
-        #     name = '{}_{}'.format(geom.x, geom.y)
-        #     if name not in list(seen):
-        #         all_settlements_pop += item['population']
-        #         seen.add(name)
-
-        # if len(region_settlements) > 0:
-        #     region_settlements['geometry'] = region_settlements['geometry'].representative_point()
-        #     region_settlements.to_file(os.path.join(RESULTS, iso3,
-        #         region['GID_3'] + '.shp'), crs='epsg:4326')
-        all_settlements_pop = region_settlements['population'].sum()
 
         area_km2 = get_area(region)
 
@@ -184,14 +154,80 @@ def disaggregate(iso3, settlements, tile_lookup):
             population = 0
             pop_density_km2 = 0
 
+        output.append({
+            'GID_0': region['GID_0'],
+            'GID_2': region['GID_2'],
+            'GID_3': region['GID_3'],
+            'population': population,
+            'area_km2': area_km2,
+            'pop_density_km2': pop_density_km2,
+            'id_range_m': id_range_m,
+        })
+
+    output = pd.DataFrame(output)
+    output.to_csv(path, index=False)
+
+    return
+
+
+def import_regional_lut(iso3):
+    """
+
+    """
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'gid_3_regional_data.csv')
+    data = pd.read_csv(path)
+
+    output = {}
+
+    for idx, item in data.iterrows():
+        output[item['GID_3']] = {
+            'GID_0': item['GID_0'],
+            'GID_2': item['GID_2'],
+            'population': item['population'],
+            'area_km2': item['area_km2'],
+            'pop_density_km2': item['pop_density_km2'],
+            'id_range_m': item['id_range_m'],
+        }
+
+    return output
+
+
+def disaggregate(iso3, settlements, regional_lut):
+    """
+
+    """
+    output = []
+
+    filename = 'settlements.shp'
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements', filename)
+    all_settlements = gpd.read_file(path, crs='epsg:4326')#[:1]
+    all_settlements['geometry'] = all_settlements['geometry'].to_crs('epsg:3857')
+    all_settlements['geometry'] = all_settlements['geometry'].buffer(10)
+    all_settlements['geometry'] = all_settlements['geometry'].to_crs('epsg:4326')
+
+    filename = 'regions_3_{}.shp'.format(iso3)
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'regions', filename)
+    regions = gpd.read_file(path, crs='epsg:4326')#[:20]
+
+    for idx, region in regions.iterrows():
+
+        # if not region['GID_3'] == 'PER.21.8.6_1':
+        #     continue
+
+        regional_data = regional_lut[region['GID_3']]
+
         if region['geometry'].type == 'Polygon':
-            region_geom = gpd.GeoDataFrame({'geometry': region['geometry']},
+            region_gdf = gpd.GeoDataFrame({'geometry': region['geometry']},
                 index=[0], crs='epsg:4326')
         else:
-            region_geom = gpd.GeoDataFrame({'geometry': region['geometry']},
+            region_gdf = gpd.GeoDataFrame({'geometry': region['geometry']},
                 crs='epsg:4326')
 
-        covered_settlements = gpd.overlay(settlements, region_geom, how='intersection')
+        region_settlements = gpd.overlay(all_settlements, region_gdf, how='intersection')
+
+        all_settlements_pop = region_settlements['population'].sum()
+
+        covered_settlements = gpd.overlay(settlements, region_gdf, how='intersection')
 
         if len(covered_settlements) == 0:
             continue
@@ -204,13 +240,13 @@ def disaggregate(iso3, settlements, tile_lookup):
                 'GID_id': settlement['GID_id'],
                 'modeling_region': settlement['modeling_region'],
                 'names': settlement['names'],
-                'population': population,
-                'area_km2': area_km2,
-                'pop_density_km2': pop_density_km2,
+                'population': regional_data['population'],
+                'area_km2': regional_data['area_km2'],
+                'pop_density_km2': regional_data['pop_density_km2'],
                 'type': settlement['type'],
                 'settlement_pop': settlement['population'],
                 'all_settlements_pop': all_settlements_pop,
-                'id_range_m': id_range_m,
+                'id_range_m': regional_data['id_range_m'],
                 'cost_per_pop_covered': settlement['cost_per_pop_covered'],
                 'cost_per_settlement': settlement['cost_per_settlement'],
                 'lon': settlement['lon'],
@@ -334,6 +370,7 @@ def aggregate_to_regions(iso3):
             attributes = {}
 
             for idx, item in data.iterrows():
+
                 if region == item['GID_3'] and strategy == item['strategy']:
 
                     if item['cost_per_settlement'] > 0:
@@ -351,7 +388,7 @@ def aggregate_to_regions(iso3):
 
             if len(attributes) == 0:
                 continue
-            # print(attributes['all_settlements_pop'], covered_population)
+
             output.append({
                 'strategy': strategy,
                 'GID_0': iso3,
@@ -362,7 +399,7 @@ def aggregate_to_regions(iso3):
                 'pop_density_km2': attributes['pop_density_km2'],
                 'id_range_m': attributes['id_range_m'],
                 'covered_population': covered_population,
-                'uncovered_population': uncovered_population,#attributes['all_settlements_pop'] - covered_population,
+                'uncovered_population': uncovered_population,
                 'cost_usd': cost_usd,
             })
 
@@ -398,10 +435,17 @@ if __name__ == "__main__":
 
         print('--Working on {}'.format(iso3))
 
+        print('--Loading required data')
         tile_lookup = load_raster_tile_lookup(iso3)
 
         settlements = load_settlement_costs(iso3)
 
-        disaggregate(iso3, settlements, tile_lookup)
+        get_data(iso3, tile_lookup)
 
+        regional_lut = import_regional_lut(iso3)
+
+        print('--Working on disaggregation')
+        disaggregate(iso3, settlements, regional_lut)
+
+        print('--Aggregating back to GID_3 regions')
         aggregate_to_regions(iso3)
