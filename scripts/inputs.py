@@ -60,7 +60,7 @@ fresnel_lookup = {
         '15_18_nofoliage': 13,
         '15_18_foliage': 23
     },
-    '25_40':{
+    '25_45':{
         '6_8_nofoliage': 19,
         '6_8_foliage': 29,
         '11_15_nofoliage': 16,
@@ -72,46 +72,42 @@ fresnel_lookup = {
 
 cost_dist = {
     '0_10': {
+        'cost_freq_for_link_usd': 6000,
         'two_60cm_antennas_usd': 600,
-        'tower_0_10_m_usd': 10000,
-        'tower_10_20_m_usd': 20000,
-        'tower_20_30_m_usd': 30000,
+        'site_survey_and_acquisition': 2400,
+        'tower_0_10_m_usd': 25000,
+        'tower_10_20_m_usd': 35000,
+        'tower_20_30_m_usd': 45000,
+        'radio_installation': 10000,
         'power_system': 10000,
     },
     '10_20': {
         'two_90cm_antennas_usd': 1200,
-        'tower_0_10_m_usd': 10000,
-        'tower_10_20_m_usd': 20000,
-        'tower_20_30_m_usd': 30000,
+        'site_survey_and_acquisition': 2400,
+        'tower_0_10_m_usd': 25000,
+        'tower_10_20_m_usd': 35000,
+        'tower_20_30_m_usd': 45000,
+        'radio_installation': 10000,
         'power_system': 10000,
     },
     '20_30': {
+        'cost_freq_for_link_usd': 6000,
         'two_120cm_antennas_usd': 2400,
-        'tower_0_10_m_usd': 10000,
-        'tower_10_20_m_usd': 20000,
-        'tower_20_30_m_usd': 30000,
+        'site_survey_and_acquisition': 2400,
+        'tower_0_10_m_usd': 25000,
+        'tower_10_20_m_usd': 35000,
+        'tower_20_30_m_usd': 45000,
+        'radio_installation': 10000,
         'power_system': 10000,
     },
-    '30_40': {
-        'two_120cm_antennas_usd': 4800,
-        'tower_0_10_m_usd': 10000,
-        'tower_10_20_m_usd': 20000,
-        'tower_20_30_m_usd': 30000,
+    '30_45': {
+        'cost_freq_for_link_usd': 6000,
+        'two_180cm_antennas_usd': 4800,
+        'site_survey_and_acquisition': 2400,
+        'tower_0_10_m_usd': 25000,
+        'tower_10_20_m_usd': 35000,
+        'tower_20_30_m_usd': 45000,
+        'radio_installation': 10000,
         'power_system': 10000,
     }
-}
-
-cost_freq = {
-    '6_8': {
-        # 'cost_each_usd': 3000,
-        'cost_freq_for_link_usd': 6000,
-    },
-    '11_13': {
-        # 'cost_each_usd': 3000,
-        'cost_freq_for_link_usd': 6000,
-    },
-    '15_18': {
-        # 'cost_each_usd': 3000,
-        'cost_freq_for_link_usd': 6000,
-    },
 }

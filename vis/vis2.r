@@ -15,10 +15,16 @@ data_idn$country = ifelse(grepl("Papua", data_idn$names),
 data = rbind(data_per, data_idn)
 remove(data_per, data_idn)
 
+# write.csv(data, file.path(folder, 'figures', 'test.csv'))
+
 data = data %>%
   group_by(country) %>%
   mutate(id_decile = ntile(id_range_m, 10),
          pop_d_decile = ntile(pop_density_km2, 10),)
+
+data$strategy = factor(data$strategy,
+                           levels=c('clos', 'nlos'),
+                           labels=c('Only-CLOS', 'Hybrid CLOS-NLOS'))
 
 data$id_decile = as.factor(as.character(data$id_decile))
 data$id_decile = factor(data$id_decile,
