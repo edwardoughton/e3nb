@@ -23,7 +23,6 @@ from inputs import rain_region_distances
 from inputs import frequency_lookup
 from inputs import fresnel_lookup
 from inputs import cost_dist
-from inputs import cost_freq
 
 grass7bin = r'"C:\Program Files\GRASS GIS 7.8\grass78.bat"'
 os.environ['GRASSBIN'] = grass7bin
@@ -355,7 +354,7 @@ def find_correct_tile(point, modis_lookup):
 
 def fresnel_clearance_lookup(path_length, frequency, fresnel_lookup, foliage):
     """
-    Check freznel clearance zone.
+    Check fresnel clearance zone.
 
     """
     if path_length < 10000:
@@ -543,7 +542,7 @@ def check_los(file_path, point):
                 return los
 
 
-def estimate_cost(path_length, frequency, cost_by_dist, cost_by_freq, antenna_height):
+def estimate_cost(path_length, frequency, cost_by_dist, antenna_height):
     """
     Estimate the link cost.
 
@@ -555,7 +554,7 @@ def estimate_cost(path_length, frequency, cost_by_dist, cost_by_freq, antenna_he
         lower = int(key.split('_')[0]) * 1e3
         upper = int(key.split('_')[1]) * 1e3
 
-        if int(lower) < path_length <= int(upper):
+        if int(lower) <= path_length <= int(upper):
 
             for k, v in value.items():
                 if 'tower' in k:
@@ -565,15 +564,7 @@ def estimate_cost(path_length, frequency, cost_by_dist, cost_by_freq, antenna_he
                         continue
                 cost_dict[k] = v
 
-    for key, value in cost_by_freq.items():
-
-        lower = int(key.split('_')[0])
-        upper = int(key.split('_')[1])
-
-        if int(lower) < frequency <= int(upper):
-            for k, v in value.items():
-                cost_dict[k] = v
-            output.append(cost_dict)
+    output.append(cost_dict)
 
     return output
 
@@ -666,7 +657,7 @@ def estimate_covered_settlements(iso3, strategies, settlements):
 
             modeling_region = os.path.basename(path)[:-4] #get region GID ID
 
-            # if not modeling_region == 'PER.21.8_1':
+            # if not modeling_region == 'IDN.12.12_1':
             #     continue
 
             path = os.path.join(RESULTS, iso3, 'edges', strategy, modeling_region + '.shp')
@@ -677,7 +668,16 @@ def estimate_covered_settlements(iso3, strategies, settlements):
 
             covered_settlements = gpd.overlay(settlements, route, how='intersection')
 
+            seen = set()
+
             for idx, item in covered_settlements.iterrows():
+
+                x = item['geometry'].coords[0][0]
+                y = item['geometry'].coords[0][1]
+                coords = '{}_{}'.format(x, y)
+                # if coords in seen:
+                #     continue
+                seen.add(coords)
 
                 if 'GID_2' in item:
                     region = '{}'.format(item['GID_2'])
@@ -692,17 +692,53 @@ def estimate_covered_settlements(iso3, strategies, settlements):
                     'modeling_region': modeling_region,
                     'population': item['population'],
                     'type': item['type'],
+                    'coverage': 'covered',
                     'lon': item['lon'],
                     'lat': item['lat'],
                 })
 
-    ##remove duplicates from list of dicts
+            name = modeling_region + '.shp'
+            folder = os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions')
+            path = os.path.join(folder, name)
+            if not os.path.exists(path):
+                continue
+            region_shape = gpd.read_file(path, crs='epsg:4326')
+            region_settlements = gpd.overlay(settlements, region_shape, how='intersection')
+
+            for idx, item in region_settlements.iterrows():
+
+                x = item['geometry'].coords[0][0]
+                y = item['geometry'].coords[0][1]
+                coords = '{}_{}'.format(x, y)
+                if coords in seen:
+                    continue
+                # seen.add(coords)
+
+                if 'GID_2' in item:
+                    region = '{}'.format(item['GID_2'])
+                if 'GID_3' in item:
+                    region = '{}'.format(item['GID_3'])
+
+                output.append({
+                    'strategy': strategy,
+                    'id': item['id'],
+                    'GID_0': item['GID_0'],
+                    'GID_id': region,
+                    'modeling_region': modeling_region,
+                    'population': item['population'],
+                    'type': item['type'],
+                    'coverage': 'uncovered',
+                    'lon': item['lon'],
+                    'lat': item['lat'],
+                })
+
+    #remove duplicates from list of dicts
     output = {frozenset(item.items()) : item for item in output}.values()
 
     return output
 
 
-def get_results(iso3, strategies, results, covered_settlements,
+def get_results(iso3, strategies, results, all_settlements,
     regional_lookup):
     """
 
@@ -713,18 +749,24 @@ def get_results(iso3, strategies, results, covered_settlements,
 
     for region in results:
         modeling_region = region['modeling_region'].replace("'", "")
-
         regions_lut.add(modeling_region)
 
     for strategy in strategies:
+
         for modeling_region in list(regions_lut):
 
-            covered_population = 0
+            # if not modeling_region == 'IDN.12.12_1':
+            #     continue
 
-            for settlement in covered_settlements:
+            covered_population = 0
+            uncovered_settlement_population = 0
+            for settlement in all_settlements:
                 if modeling_region == settlement['GID_id']:
                     if strategy == settlement['strategy']:
-                        covered_population += settlement['population']
+                        if settlement['coverage'] == 'covered':
+                            covered_population += settlement['population']
+                        else:
+                            uncovered_settlement_population += settlement['population']
 
             cost = 0
             total_path_length = 0
@@ -737,7 +779,7 @@ def get_results(iso3, strategies, results, covered_settlements,
                         cost += item['cost_usd']
 
             items = {}
-
+            # print(strategy, cost)
             for item in regional_lookup:
                 if item['modeling_region'] == modeling_region:
                     items['regions'] = item['regions']
@@ -761,6 +803,7 @@ def get_results(iso3, strategies, results, covered_settlements,
                 'area_km2': items['area_km2'],
                 'pop_density_km2': items['pop_density_km2'],
                 'covered_population': covered_population,
+                'uncovered_settlement_population': uncovered_settlement_population,
                 'total_path_length': total_path_length,
                 'cost_usd': cost,
             })
@@ -771,49 +814,53 @@ def get_results(iso3, strategies, results, covered_settlements,
     return output
 
 
-def get_settlement_costs(strategies, aggregated_results,
-    covered_settlements):
+def get_settlement_costs(strategies, aggregated_results, all_settlements):
     """
 
     """
-    # countries = set()
-
     output = []
+    covered_settlements = []
+
+    for item in all_settlements:
+        if item['coverage'] == 'covered':
+            covered_settlements.append(item)
 
     for item in aggregated_results:
 
         modeling_region = item['modeling_region']
         strategy = item['strategy']
-        if item['cost_usd'] == 0 or item['covered_population'] == 0:
+
+        if item['covered_population'] == 0:
             cost_per_pop_covered = 0
         else:
             cost_per_pop_covered = item['cost_usd'] / item['covered_population']
 
         for settlement in covered_settlements:
             if modeling_region == settlement['modeling_region']:
-                output.append({
-                    # 'type': 'Feature',
-                    # 'geometry': {
-                    #     'type': 'Point',
-                    #     'coordinates': (settlement['lon'], settlement['lat'])
-                    # },
-                    # 'properties': {
-                    'strategy': strategy,
-                    'GID_0': settlement['GID_0'],
-                    'GID_id': settlement['GID_id'],
-                    'modeling_region': modeling_region,
-                    'names': item['names'],
-                    'population': settlement['population'],
-                    'type': settlement['type'],
-                    'id_range_m': item['id_range_m'],
-                    'cost_per_pop_covered': cost_per_pop_covered,
-                    'cost_per_settlement': (cost_per_pop_covered *
-                        settlement['population']),
-                    'lon': settlement['lon'],
-                    'lat': settlement['lat'],
-                    # }
-                })
-                # countries.add(settlement['GID_0'])
+                if item['strategy'] == settlement['strategy']:
+                    output.append({
+                        # 'type': 'Feature',
+                        # 'geometry': {
+                        #     'type': 'Point',
+                        #     'coordinates': (settlement['lon'], settlement['lat'])
+                        # },
+                        # 'properties': {
+                        'strategy': strategy,
+                        'GID_0': settlement['GID_0'],
+                        'GID_id': settlement['GID_id'],
+                        'modeling_region': modeling_region,
+                        'names': item['names'],
+                        'population': settlement['population'],
+                        'type': settlement['type'],
+                        'id_range_m': item['id_range_m'],
+                        'cost_per_pop_covered': cost_per_pop_covered,
+                        'cost_per_settlement': (cost_per_pop_covered *
+                            settlement['population']),
+                        'lon': settlement['lon'],
+                        'lat': settlement['lat'],
+                        # }
+                    })
+                    # countries.add(settlement['GID_0'])
 
     ##remove duplicates from list of dicts
     output = {frozenset(item.items()) : item for item in output}.values()
@@ -849,14 +896,14 @@ if __name__ == '__main__':
             modis_lookup = load_modis_tile_lookup(country)
 
             path = os.path.join(DATA_INTERMEDIATE, iso3, 'buffer_routing_zones', 'edges')
-            all_paths = glob.glob(path + '/*.shp')#[:1]#[1:2]
-            all_paths = all_paths[::-1]
+            all_paths = glob.glob(path + '/*.shp')#[1:2]
+            all_paths = all_paths#[::-1]
 
             for path in all_paths:
 
                 modeling_region = os.path.basename(path)[:-4] #get region GID ID
 
-                # if not modeling_region == 'PER.21.8_1':
+                # if not modeling_region == 'IDN.12.12_1':
                 #     continue
 
                 #set output folder
@@ -886,22 +933,7 @@ if __name__ == '__main__':
 
                 output_shapes = output_shapes + all_routes
 
-                # seen = set()
-
                 for item in all_routes:
-
-                    # x1 = item['geometry'].coords[0][0]
-                    # y1 = item['geometry'].coords[0][1]
-                    # x2 = item['geometry'].coords[1][0]
-                    # y2 = item['geometry'].coords[1][1]
-
-                    # name1 = "{}_{}_{}_{}".format(x1, y1, x2, y2)
-                    # name2 = "{}_{}_{}_{}".format(x2, y2, x1, y1)
-
-                    # if name1 in seen or name2 in seen:
-                    #     continue
-                    # seen.add(name1)
-                    # seen.add(name2)
 
                     path_length = item['properties']['length']
 
@@ -917,18 +949,12 @@ if __name__ == '__main__':
                     clearance = fresnel_clearance_lookup(path_length, frequency,
                                             fresnel_lookup, foliage)
 
-                    # #30m is cheap - built freestanding (no guide wire anchors needed)
-                    # #we might was to build higher towers, all the way up to 50m
-                    # #max_antenna_height = country['max_antenna_height']
-                    # #all clearance heights are below 50m currently as per inputs.py
-                    # #we add 2 meters as Tx cant be mounted at the top
                     antenna_height = clearance + 2
 
                     costs = estimate_cost(
                         path_length,
                         frequency,
                         cost_dist,
-                        cost_freq,
                         antenna_height,
                     )
 
@@ -967,22 +993,24 @@ if __name__ == '__main__':
 
         ##export cost results
         results = pd.DataFrame(results)
-        filename = 'cost_item_results.csv'
-        results.to_csv(os.path.join(RESULTS, iso3, filename), index=False)
+        path = os.path.join(RESULTS, iso3, 'cost_item_results.csv')
+        if len(results) > 0 :
+            results.to_csv(path, index=False)
 
         results = pd.read_csv(os.path.join(RESULTS, iso3, 'cost_item_results.csv'))
         results = results.to_dict('records')#[:10]
 
         ##estimate covered settlements
-        covered_settlements = estimate_covered_settlements(iso3, strategies, settlements)
+        all_settlements = estimate_covered_settlements(iso3, strategies, settlements)
 
-        ##get aggregated results
+        #get aggregated results
         aggregated_results = get_results(iso3, strategies, results,
-            covered_settlements, regional_lookup)
+            all_settlements, regional_lookup)
 
         ##export all final settlement results
         settlement_costs = get_settlement_costs(strategies, aggregated_results,
-            covered_settlements)
+            all_settlements)
+
         costs_by_settlement = pd.DataFrame(settlement_costs)
         filename = 'costs_by_settlement.csv'
         costs_by_settlement.to_csv(os.path.join(RESULTS, iso3, filename), index=False)
