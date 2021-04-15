@@ -56,8 +56,8 @@ def process_country_shapes(country):
 
     path = os.path.join(DATA_INTERMEDIATE, iso3)
 
-    if os.path.exists(os.path.join(path, 'national_outline.shp')):
-        return 'Already completed national outline processing'
+    # if os.path.exists(os.path.join(path, 'national_outline.shp')):
+    #     return 'Already completed national outline processing'
 
     if not os.path.exists(path):
         #Creating new directory
@@ -159,8 +159,8 @@ def process_regions(country):
 
         path_processed = os.path.join(folder, filename)
 
-        if os.path.exists(path_processed):
-            continue
+        # if os.path.exists(path_processed):
+        #     continue
 
         print('--Working on {}'.format(filename))
 
@@ -336,8 +336,8 @@ def generate_settlement_lut(country):
 
         path_output = os.path.join(folder_tifs, region[GID_level] + '.tif')
 
-        if os.path.exists(path_output):
-            continue
+        # if os.path.exists(path_output):
+        #     continue
 
         bbox = region['geometry'].envelope
 
@@ -543,7 +543,9 @@ def find_nodes(country, regions):
         nodes.loc[(nodes['sum'] <= 5000) | (nodes['sum'] < 10000), 'type'] = '5-10k'
         nodes.loc[(nodes['sum'] <= 1000) | (nodes['sum'] < 5000), 'type'] = '1-5k'
         nodes.loc[(nodes['sum'] <= 500) | (nodes['sum'] < 1000), 'type'] = '0.5-1k'
-        nodes.loc[(nodes['sum'] <= 500), 'type'] = '<0.5k'
+        nodes.loc[(nodes['sum'] <= 250) | (nodes['sum'] < 500), 'type'] = '0.25-0.5k'
+        nodes.loc[(nodes['sum'] <= 250), 'type'] = '<0.25k'
+
         nodes = nodes.dropna()
 
         for idx, item in nodes.iterrows():
@@ -578,8 +580,8 @@ def find_largest_regional_settlement(country):
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
     path_output = os.path.join(folder, 'largest_regional_settlements.shp')
 
-    if os.path.exists(path_output):
-        return print('Already processed the largest regional settlement layer')
+    # if os.path.exists(path_output):
+    #     return print('Already processed the largest regional settlement layer')
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements')
     path_input = os.path.join(folder, 'settlements' + '.shp')
@@ -615,8 +617,8 @@ def get_settlement_routing_paths(country):
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
     path_output = os.path.join(folder, 'settlement_routing.shp')
 
-    if os.path.exists(path_output):
-        return print('Already processed the settlement routing path layer')
+    # if os.path.exists(path_output):
+    #     return print('Already processed the settlement routing path layer')
 
     folder = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
     path_input = os.path.join(folder, 'largest_regional_settlements.shp')
@@ -850,6 +852,11 @@ def create_routing_buffer_zone(country):
         #export edges
         path_edges = os.path.join(folder_edges, main_node.iloc[0][GID_level] + '.shp')
         fit_edges(path_nodes, path_edges, modeling_region)
+
+        #export individual modeling region shape
+        folder_regions = os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions')
+        path = os.path.join(folder_regions, main_node.iloc[0][GID_level] + '.shp')
+        modeling_region.to_file(path, crs='epsg:4326')
 
     return
 
@@ -1272,14 +1279,14 @@ if __name__ == '__main__':
         {
             'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2,
             'lowest_regional_level': 3, 'region': 'LAT',
-            'pop_density_km2': 100, 'settlement_size': 100,
+            'pop_density_km2': 50, 'settlement_size': 100,
             'main_settlement_size': 20000, 'subs_growth': 3.5,
             'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
         {
             'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2,
             'lowest_regional_level': 3, 'region': 'SEA',
-            'pop_density_km2': 100, 'settlement_size': 100,
+            'pop_density_km2': 50, 'settlement_size': 100,
             'main_settlement_size': 20000,  'subs_growth': 3.5,
             'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
         },
