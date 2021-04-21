@@ -1,5 +1,5 @@
 """
-NLOS Demo.
+nlos Demo.
 
 Written by Ed Oughton.
 
@@ -16,6 +16,8 @@ import geopandas as gpd
 from shapely.geometry import Point, box, LineString, shape
 from rasterstats import gen_zonal_stats
 import rasterio
+import networkx as nx
+from itertools import tee
 
 from inputs import countries
 from inputs import strategies
@@ -89,15 +91,69 @@ def load_los_lookup(iso3):
         if (lower, upper) not in output:
             output[(lower, upper)] = []
 
+        if row['clos_probability'] == 'no data':
+            clos_probability = 0
+        else:
+            clos_probability = round(float(row['clos_probability']), 4)
+
         output[(lower, upper)].append((
                 float(row["id_range_m"]),
-                float(row['clos_probability']),
+                clos_probability,
             ))
 
     for key, value_list in output.items():
         value_list.sort(key=lambda tup: tup[0])
 
     return output
+
+
+def find_los_probability(region_info, path_length, los_lookup):
+    """
+    Loop through the terrain lookup and return the correct data
+    based on the interdecile range.
+    """
+    id_range_m = region_info['id_range_m']
+
+    probability = 0
+
+    for key, value in los_lookup.items(): #loop through distance keys
+
+        lower_distance, upper_distance = key
+
+        if lower_distance <= path_length < upper_distance:
+
+            value = sorted(value, key=lambda tup: tup[0])
+
+            for a, b in pairwise(value): #loop through terrain deciles
+
+                lower_id_range, lower_probability  = a
+                upper_id_range, upper_probability  = b
+
+                if lower_id_range <= id_range_m < upper_id_range:
+                    probability = lower_probability #return conservative probability
+                    break
+
+    random_number = random.uniform(0, 1)
+
+    if random_number == None:
+        return 'nlos'
+
+    if random_number < probability:
+        return 'clos'
+    else:
+        return 'nlos'
+
+
+def pairwise(iterable):
+    """
+    Return iterable of 2-tuples in a sliding window.
+    >>> list(pairwise([1,2,3,4]))
+    [(1,2),(2,3),(3,4)]
+    """
+    a, b = tee(iterable)
+    next(b, None)
+
+    return zip(a, b)
 
 
 def lookup_rain_region(strategy, rain_region_distances):
@@ -125,7 +181,7 @@ def load_region_lookup(region_lookup, routing_structures):
 
 
 def calc_paths(routing_structure, strategy, tile_lookup,
-    folder_out_viewsheds):
+    folder_out_viewsheds, los_lookup, region_info):
     """
     Calculate the number of paths and associated strategy.
 
@@ -138,6 +194,9 @@ def calc_paths(routing_structure, strategy, tile_lookup,
     routing_structure['length'] = routing_structure['geometry'].length
     path_length = routing_structure['length'].iloc[0]
 
+    # if not path_length > 60000:
+    #     return []
+
     max_clos_distance = lookup_rain_region('clos', rain_region_distances)
     max_nlos_distance = lookup_rain_region('nlos', rain_region_distances)
 
@@ -148,126 +207,145 @@ def calc_paths(routing_structure, strategy, tile_lookup,
         return None
 
     if strategy == 'clos':
-        if los == 'clos':
-            if path_length < max_clos_distance:
-                return {
-                    'type': 'Feature',
-                    'geometry': routing_structure['geometry'][0],
-                    'properties': {
-                        'length': path_length,
-                        'link_los': los,
-                    },
-                }
-    elif strategy == 'nlos':
-        if los == 'clos':
-            if path_length < max_clos_distance:
-                return {
-                    'type': 'Feature',
-                    'geometry': routing_structure['geometry'][0],
-                    'properties': {
-                        'length': path_length,
-                        'link_los': los,
-                    },
-                }
-        elif los == 'nlos':
-            if path_length < max_nlos_distance:
-                return {
-                    'type': 'Feature',
-                    'geometry': routing_structure['geometry'][0],
-                    'properties': {
-                        'length': path_length,
-                        'link_los': los,
-                    },
-                }
+
+        if los == 'clos' and path_length < max_clos_distance:
+
+            return [{
+                'type': 'Feature',
+                'geometry': routing_structure['geometry'][0],
+                'properties': {
+                    'length': path_length,
+                    'link_los': los,
+                    'status': 'possible',
+                },
+            }]
+
         else:
-            print('Did not recognize los')
-    else:
-        print('Did not recognize strategy')
+
+            output = []
+
+            new_routing_nodes = get_nodes(routing_structure, strategy,
+                max_clos_distance, max_nlos_distance, los_lookup, region_info)
+
+            for item in new_routing_nodes:
+
+                output.append({
+                    'type': 'Feature',
+                    'geometry': {
+                        'type': 'LineString',
+                        'coordinates': [item[0], item[1]]
+                    },
+                    'properties': {
+                        'length': LineString([
+                            (item[0][0], item[0][1]),
+                            (item[1][0], item[1][1])]).length,
+                        'link_los': item[2],
+                        'status': 'not possible: had to build new towers',
+                    }
+                })
+
+            return output
+
+    elif strategy == 'nlos':
+
+        if los == 'clos' and path_length < max_clos_distance:
+
+            return [{
+                'type': 'Feature',
+                'geometry': routing_structure['geometry'][0],
+                'properties': {
+                    'length': path_length,
+                    'link_los': los,
+                    'status': 'possible',
+                },
+            }]
+
+        elif los == 'nlos' and path_length < max_nlos_distance:
+
+            return [{
+                'type': 'Feature',
+                'geometry': routing_structure['geometry'][0],
+                'properties': {
+                    'length': path_length,
+                    'link_los': los,
+                    'status': 'possible',
+                },
+            }]
+
+        else:
+
+            output = []
+
+            new_routing_nodes = get_nodes(routing_structure, strategy,
+                max_clos_distance, max_nlos_distance, los_lookup, region_info)
+
+            for item in new_routing_nodes:
+
+                output.append({
+                    'type': 'Feature',
+                    'geometry': {
+                        'type': 'LineString',
+                        'coordinates': [item[0], item[1]]
+                    },
+                    'properties': {
+                        'length': LineString([
+                            (item[0][0], item[0][1]),
+                            (item[1][0], item[1][1])]).length,
+                        'link_los': item[2],
+                        'status': 'not possible: had to build new towers',
+                    }
+                })
+
+            return output
 
     return None
 
 
-def find_connecting_links(iso3, interim_shapes):
+def get_nodes(routing_structure, strategy, max_clos_distance,
+    max_nlos_distance, los_lookup, region_info):
     """
-    Ensure only the links that fully connect with the main settlement
-    are included.
 
     """
-    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure')
-    filename = 'main_nodes.shp'
-    path = os.path.join(directory, filename)
-    main_nodes = gpd.read_file(path, crs='epsg:4326')
+    new_routing_nodes = []
+    point_start = routing_structure['geometry'][0].coords[0]
+    point_end = routing_structure['geometry'][0].coords[-1]
+    # new_routing_nodes.append(point_start) #has to be inserted first
 
-    main_nodes = main_nodes.to_crs('epsg:3857')
-    main_nodes['geometry'] = main_nodes['geometry'].buffer(10)
+    while not point_end == point_start:
 
-    if len(interim_shapes) == 0:
-        return []
+        total_remaining_path = LineString([point_start, point_end])
 
-    interim_shapes = gpd.GeoDataFrame.from_features(interim_shapes, crs='epsg:3857')
+        intermediate_point = total_remaining_path.interpolate(
+            max_clos_distance).coords[0]
 
-    node = main_nodes[main_nodes.intersects(interim_shapes.unary_union)]
+        line = LineString([point_start, intermediate_point])
 
-    main_route = interim_shapes[interim_shapes.intersects(node.unary_union)]
-    main_route = main_route['geometry'].buffer(10)
+        path_length = line.length
 
-    buffered_routes = interim_shapes.copy()
-    union = buffered_routes['geometry'].buffer(10).unary_union
+        los = find_los_probability(region_info, path_length, los_lookup)
 
-    if union.geom_type == 'Polygon':
-        buffered_routes = []
-        buffered_routes.append(union)
-    else:
-        buffered_routes = list(union.geoms)
+        if los == 'clos':
+            new_routing_nodes.append((point_start, intermediate_point, los))
+            point_start = intermediate_point
+            continue
+        elif los == 'nlos' and strategy == 'nlos':
+            distance = max_nlos_distance
+        elif los == 'nlos' and strategy == 'clos':
+            distance = 2000
+        else:
+            print('Did not recognize stated LOS')
 
-    geojsons = []
+        intermediate_point = line.interpolate(distance).coords[0]
 
-    for item in buffered_routes:
-        geojsons.append({
-            'type': 'Feature',
-            'geometry': item,
-            'properties': {},
-        })
+        # these need to be inserted in order
+        new_routing_nodes.append((point_start, intermediate_point, los))
 
-    if len(geojsons) == 0:
-        return []
+        point_start = intermediate_point
 
-    buffered_routes = gpd.GeoDataFrame.from_features(geojsons, crs='epsg:3857')
+    #remove duplicate nodes
+    new_routing_nodes = list(dict.fromkeys(new_routing_nodes))
 
-    geojsons2 = []
-
-    for idx, buffered_route in buffered_routes.iterrows():
-        if buffered_route['geometry'].intersects(main_route.unary_union):
-            geojsons2.append({
-                'type': 'Feature',
-                'geometry': buffered_route['geometry'],
-                'properties': {
-                    'id': idx,
-                },
-            })
-
-    if len(geojsons2) == 0:
-        return []
-
-    buffered_routes = gpd.GeoDataFrame.from_features(geojsons2, crs='epsg:3857')
-
-    all_routes = interim_shapes[interim_shapes.intersects(buffered_routes.unary_union)]
-
-    all_routes = all_routes.to_dict('records')
-
-    output = []
-
-    for item in all_routes:
-        output.append({
-            'type': 'Feature',
-            'geometry': item['geometry'],
-            'properties': {
-                'link_los': item['link_los'],
-                'length': item['length'],
-            },
-        })
-
-    return output
+    return new_routing_nodes
 
 
 def lookup_frequency(path_length, frequency_lookup):
@@ -476,24 +554,17 @@ def viewshed(point, path_input, path_output, tile_name, max_distance, crs):
     """
     with Session(gisdb=path_output, location="location", create_opts=crs):
 
-        # print('parse command')
-        # print(gcore.parse_command("g.gisenv", flags="s"))#, set="DEBUG=3"
-
-        # print('r.external')
         # now link a GDAL supported raster file to a binary raster map layer,
         # from any GDAL supported raster map format, with an optional title.
         # The file is not imported but just registered as GRASS raster map.
         gcore.run_command('r.external', input=path_input, output=tile_name, overwrite=True)
 
-        # print('r.external.out')
         #write out as geotiff
         gcore.run_command('r.external.out', directory='viewsheds', format="GTiff")
 
-        # print('r.region')
         #manage the settings of the current geographic region
         gcore.run_command('g.region', raster=tile_name)
 
-        # print('r.viewshed')
         #for each point in the output that is NULL: No LOS
         gcore.run_command('r.viewshed', #flags='e',
                 input=tile_name,
@@ -533,11 +604,9 @@ def check_los(file_path, point):
 
         for val in src.sample([(x, y)]):
             if np.isnan(val):
-                # print('is nan: {} therefore nlos'.format(val))
                 los = 'nlos'
                 return los
             else:
-                # print('is not nan: {} therefore los'.format(val))
                 los ='clos'
                 return los
 
@@ -657,7 +726,7 @@ def estimate_covered_settlements(iso3, strategies, settlements):
 
             modeling_region = os.path.basename(path)[:-4] #get region GID ID
 
-            # if not modeling_region == 'IDN.12.12_1':
+            # if not modeling_region == 'PER.1.1_1': #'IDN.12.12_1':
             #     continue
 
             path = os.path.join(RESULTS, iso3, 'edges', strategy, modeling_region + '.shp')
@@ -748,6 +817,7 @@ def get_results(iso3, strategies, results, all_settlements,
     regions_lut = set()
 
     for region in results:
+
         modeling_region = region['modeling_region'].replace("'", "")
         regions_lut.add(modeling_region)
 
@@ -779,7 +849,7 @@ def get_results(iso3, strategies, results, all_settlements,
                         cost += item['cost_usd']
 
             items = {}
-            # print(strategy, cost)
+
             for item in regional_lookup:
                 if item['modeling_region'] == modeling_region:
                     items['regions'] = item['regions']
@@ -874,6 +944,8 @@ if __name__ == '__main__':
 
         iso3 = country['iso3']
 
+        los_lookup = load_los_lookup(iso3)
+
         tile_lookup = load_raster_tile_lookup(iso3)
 
         ##load settlement shapes
@@ -891,7 +963,7 @@ if __name__ == '__main__':
 
         for strategy in strategies:
 
-            print('Working on {}'.format(strategy))
+            print('Working on {} in {}'.format(strategy, iso3))
 
             modis_lookup = load_modis_tile_lookup(country)
 
@@ -903,7 +975,7 @@ if __name__ == '__main__':
 
                 modeling_region = os.path.basename(path)[:-4] #get region GID ID
 
-                # if not modeling_region == 'IDN.12.12_1':
+                # if not modeling_region == 'IDN.15.12_1': #'IDN.12.12_1':#'PER.1.1_1': #
                 #     continue
 
                 #set output folder
@@ -916,24 +988,22 @@ if __name__ == '__main__':
 
                 region_info = load_region_lookup(regional_lookup, routing_structures)
 
-                interim_shapes = []
+                if region_info == None:
+                    continue
+
                 output_shapes = []
 
                 for idx, routing_structure in routing_structures.iterrows():
 
-                    route = calc_paths(routing_structure, strategy, tile_lookup,
-                        folder_out_viewsheds)
+                    routes = calc_paths(routing_structure, strategy, tile_lookup,
+                        folder_out_viewsheds, los_lookup, region_info)
 
-                    if route == None or len(route) == 0:
+                    if routes == None or len(routes) == 0:
                         continue
 
-                    interim_shapes.append(route)
+                    output_shapes = output_shapes + routes
 
-                all_routes = find_connecting_links(iso3, interim_shapes)
-
-                output_shapes = output_shapes + all_routes
-
-                for item in all_routes:
+                for item in output_shapes:
 
                     path_length = item['properties']['length']
 
@@ -960,24 +1030,27 @@ if __name__ == '__main__':
 
                     for cost in costs:
                         for key, value in cost.items():
-                            results.append({
-                                'iso3': iso3,
-                                'strategy': strategy,
-                                'modeling_region': modeling_region,
-                                'regions': region_info['regions'],
-                                'names': region_info['names'].replace("'", ""),
-                                'population': region_info['population'],
-                                'area_km2': region_info['area_km2'],
-                                'pop_density_km2': region_info['pop_density_km2'],
-                                'path_length': path_length,
-                                'link_los': item['properties']['link_los'],
-                                'frequency': frequency,
-                                'foliage': foliage,
-                                'clearance': clearance,
-                                'antenna_height': antenna_height,
-                                'asset_type': key,
-                                'cost_usd': value,
-                            })
+                            try:
+                                results.append({
+                                    'iso3': iso3,
+                                    'strategy': strategy,
+                                    'modeling_region': modeling_region,
+                                    'regions': region_info['regions'],
+                                    'names': region_info['names'].replace("'", ""),
+                                    'population': region_info['population'],
+                                    'area_km2': region_info['area_km2'],
+                                    'pop_density_km2': region_info['pop_density_km2'],
+                                    'path_length': path_length,
+                                    'link_los': item['properties']['link_los'],
+                                    'frequency': frequency,
+                                    'foliage': foliage,
+                                    'clearance': clearance,
+                                    'antenna_height': antenna_height,
+                                    'asset_type': key,
+                                    'cost_usd': value,
+                                })
+                            except:
+                                print('--PROBLEM TRYING TO WRITE {}'.format(modeling_region))
 
                 if len(output_shapes) == 0:
                     continue
@@ -993,11 +1066,15 @@ if __name__ == '__main__':
 
         ##export cost results
         results = pd.DataFrame(results)
+
         path = os.path.join(RESULTS, iso3, 'cost_item_results.csv')
         if len(results) > 0 :
             results.to_csv(path, index=False)
 
-        results = pd.read_csv(os.path.join(RESULTS, iso3, 'cost_item_results.csv'))
+        path = os.path.join(RESULTS, iso3, 'cost_item_results.csv')
+        if not os.path.exists(path):
+            continue
+        results = pd.read_csv(path)
         results = results.to_dict('records')#[:10]
 
         ##estimate covered settlements

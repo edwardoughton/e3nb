@@ -29,7 +29,7 @@ rain_region_distances = {
         'low': 45000 #los link distance in meters
     },
     'nlos': {
-        'high': 15000, #nlos link distance in meters
+        'high': 5000, #nlos link distance in meters
         'moderate': 10000, #nlos link distance in meters
         'low': 15000 #nlos link distance in meters
     },
