@@ -15,8 +15,6 @@ data_idn$country = ifelse(grepl("Papua", data_idn$names),
 data = rbind(data_per, data_idn)
 remove(data_per, data_idn)
 
-# write.csv(data, file.path(folder, 'figures', 'test.csv'))
-
 data = data %>%
   group_by(country) %>%
   mutate(id_decile = ntile(id_range_m, 10),
