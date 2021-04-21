@@ -23,8 +23,6 @@ import rasterio
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.mask import mask
 from rasterstats import zonal_stats, gen_zonal_stats
-# import rioxarray as rxr
-# import xarray
 
 grass7bin = r'"C:\Program Files\GRASS GIS 7.8\grass78.bat"'
 os.environ['GRASSBIN'] = grass7bin
@@ -73,27 +71,7 @@ def load_raster_tile_lookup(iso3):
     return lookup
 
 
-def get_terrain_lookup(region_shapes, terrain_lookup, iso3):
-    """
-
-    """
-    region_shapes = region_shapes.merge(terrain_lookup,
-        left_on='regions', right_on='regions')
-
-    filename = 'modeling_regions_w_terrain.shp'
-    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'terrain_analysis')
-
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-
-    region_shapes.to_file(os.path.join(directory, filename), crs='epsg:4326')
-
-    terrain_lookup = region_shapes[['regions', 'id_range_m', 'area_km2']]
-
-    return terrain_lookup
-
-
-def generate_grid(iso3, tile_lookup, side_length):
+def generate_grid(iso3, side_length):
     """
     Generate a spatial grid for the chosen country.
     """
@@ -125,6 +103,7 @@ def generate_grid(iso3, tile_lookup, side_length):
 
     intersection = gpd.overlay(grid, country_outline, how='intersection')
     intersection.crs = "epsg:3857"
+    intersection['area_km2'] = intersection['geometry'].area / 1e6
     intersection = intersection.to_crs("epsg:4326")
     intersection.to_file(path_output, crs="epsg:4326")
 
@@ -135,7 +114,7 @@ def manually_create_grid(xmin, ymin, xmax, ymax, length, wide):
     """
 
     """
-    cols = list(range(int(np.floor(xmin)), int(np.ceil(xmax)), int(wide)))
+    cols = list(range(int(np.floor(xmin)), int(np.ceil(xmax - int(wide))), int(wide)))
     rows = list(range(int(np.floor(ymin)), int(np.ceil(ymax)), int(length)))
 
     polygons = []
@@ -147,93 +126,6 @@ def manually_create_grid(xmin, ymin, xmax, ymax, length, wide):
             )
 
     return polygons
-
-
-def add_pop_data_to_grid(iso3, tile_lookup):
-    """
-    Query the settlement layer to get an estimated population
-    for each grid square.
-
-    """
-    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
-    filename = 'grid_1e4_1e4_w_data.shp'
-    path_output = os.path.join(directory, filename)
-
-    if os.path.exists(path_output):
-        return gpd.read_file(path_output, crs='epsg:4328')
-
-    filename = 'grid_{}_{}_km.shp'.format(1e4, 1e4)
-    path = os.path.join(directory, filename)
-    grid = gpd.read_file(path, crs='epsg:4328')
-
-    filename = 'settlements.tif'
-    path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, filename)
-
-    output = []
-
-    for idx, grid_tile in grid.iterrows():
-
-        area_km = get_area(grid_tile)
-
-        with rasterio.open(path_settlements) as src:
-
-            # transform
-            affine = src.transform
-            array = src.read(1)
-
-            population = [d['sum'] for d in zonal_stats(
-                grid_tile['geometry'],
-                array,
-                stats=['sum'],
-                nodata=0,
-                affine=affine
-                )][0]
-
-        if not population == None:
-            if population > 0:
-                pop_density_km2 = population / area_km
-            else:
-                pop_density_km2 = 0
-        else:
-            population = 'None'
-            pop_density_km2 = 'None'
-
-        output.append({
-            'type': 'Feature',
-            'geometry': grid_tile['geometry'],
-            'properties': {
-                'area_km2': area_km,
-                'pop_density_km2': pop_density_km2,
-                'population': population
-            }
-        })
-
-    output = gpd.GeoDataFrame.from_features(output, crs='epsg:4326')
-
-    output = output.replace([np.inf, -np.inf], np.nan)
-
-    output = output[output.geometry.notnull()]
-
-    output.to_file(path_output, crs="epsg:4326")
-
-    return output
-
-
-def get_area(modeling_region):
-    """
-    Return the area in square km.
-
-    Parameters
-    ----------
-    modeling_region : series
-        The modeling region that we wish to find the area for.
-
-    """
-    project = pyproj.Transformer.from_crs('epsg:4326', 'esri:54009', always_xy=True).transform
-    new_geom = transform(project, modeling_region['geometry'])
-    area_km = new_geom.area / 1e6
-
-    return area_km
 
 
 def find_tile(polygon, tile_lookup):
@@ -275,74 +167,7 @@ def find_tile(polygon, tile_lookup):
         print('Problem with find_tile: Unable to find raster path')
 
 
-def sum_to_upper_grid(iso3):
-    """
-    Go from lower grid with correct population estimates, to upper grid.
-
-    """
-    output = []
-
-    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'grid')
-    filename = 'grid_1e5_1e5_w_data.shp'
-    path_output = os.path.join(directory, filename)
-
-    if os.path.exists(path_output):
-        return gpd.read_file(path_output, crs='epsg:4328')
-
-    filename = 'grid_{}_{}_km.shp'.format(1e5, 1e5)
-    path = os.path.join(directory, filename)
-    grid_upper = gpd.read_file(path, crs='epsg:4328')
-
-    filename = 'grid_1e4_1e4_w_data.shp'#.format(1e4, 1e4)
-    path = os.path.join(directory, filename)
-    grid_lower = gpd.read_file(path, crs='epsg:4328')
-
-    for idx, upper_tile in grid_upper.iterrows():
-        population = 0
-        area_km2 = 0
-        for idx, lower_tile in grid_lower.iterrows():
-            lower_tile_point = lower_tile['geometry'].representative_point()
-            if upper_tile['geometry'].intersects(lower_tile_point):
-
-                if not lower_tile['population'] == 'None':
-                    pop = float(lower_tile['population'])
-                else:
-                    continue
-
-                if pop > 0:
-                    population += pop
-
-                if not lower_tile['area_km2'] == 'None':
-                    area = float(lower_tile['area_km2'])
-                else:
-                    continue
-
-                if area > 0:
-                    area_km2 += area
-
-        if not population == 0:
-            pop_density_km2 = population / area_km2
-        else:
-            pop_density_km2 = 0
-
-        output.append({
-            'type': 'Feature',
-            'geometry': upper_tile['geometry'],
-            'properties': {
-                'area_km2':area_km2,
-                'population': population,
-                'pop_density_km2': pop_density_km2,
-            }
-        })
-
-    output = gpd.GeoDataFrame.from_features(output, crs='epsg:4326')
-
-    output.to_file(path_output, crs="epsg:4326")
-
-    return 0
-
-
-def add_id_range_data_to_grid(iso3, tile_lookup):
+def add_id_range_data_to_grid(iso3, tile_lookup, side_length):
     """
     Query the Digital Elevation Model to get an estimated interdecile
     range for each grid square.
@@ -355,7 +180,7 @@ def add_id_range_data_to_grid(iso3, tile_lookup):
     if os.path.exists(path_output):
         return gpd.read_file(path_output, crs='epsg:4328')
 
-    filename = 'grid_1e5_1e5_w_data.shp'
+    filename = 'grid_{}_{}_km.shp'.format(side_length, side_length)
     path = os.path.join(directory, filename)
     grid = gpd.read_file(path, crs='epsg:4328')
 
@@ -385,8 +210,8 @@ def add_id_range_data_to_grid(iso3, tile_lookup):
             'properties': {
                 'id_range_m': id_range_m,
                 'area_km2': grid_tile['area_km2'],
-                'pop_density_km2': grid_tile['pop_densit'],
-                'population': grid_tile['population'],
+                # 'pop_density_km2': grid_tile['pop_densit'],
+                # 'population': grid_tile['population'],
             }
         })
 
@@ -428,14 +253,14 @@ def interdecile_range(x):
     return interdecile_range
 
 
-def estimate_terrain_deciles(terrain_lookup):
+def estimate_terrain_deciles(grid):
     """
 
     """
-    #only select those areas over 7k
-    lookup = terrain_lookup.loc[terrain_lookup['area_km2'] > 7000].reset_index()
+    # terrain_lookup = grid.loc[grid['area_km2'] > 1000].reset_index()
 
-    terrain_lookup['decile'] = pd.qcut(terrain_lookup['id_range_m'], 11, labels=False)
+    terrain_lookup = grid
+    terrain_lookup['decile'] = pd.qcut(terrain_lookup['id_range_m'], 10, labels=False)
 
     terrain_lookup = terrain_lookup[['decile', 'id_range_m']]
 
@@ -450,31 +275,31 @@ def select_grid_sampling_areas(iso3, grid, lut):
     """
 
     """
-
-    if iso3 == 'IDN':
-        lut.remove(lut[0])
-
-    for i in range(0, 10):
-        if i == 0:
-            grid.loc[(grid['id_range_m'] < lut[0]), 'decile'] = str(i)
-            grid.loc[(grid['id_range_m'] < lut[0]), 'value'] = str(lut[i])
-        elif i < 9:
+    for i in range(1, 11):
+        if i == 1:
+            grid.loc[(grid['id_range_m'] < lut[1]), 'decile'] = str(i)
+            value_name = '0-{}'.format(str(lut[1]))
+            grid.loc[(grid['id_range_m'] < lut[1]), 'value'] = value_name
+        elif i <= 9:
             grid.loc[(
-                grid['id_range_m'] > lut[i-1]) &
-                (grid['id_range_m'] < lut[i]), 'decile'] = str(i)
+                grid['id_range_m'] >= lut[i-1]) &
+                (grid['id_range_m'] <= lut[i]), 'decile'] = str(i)
+            value_name = '{}-{}'.format(str(lut[i-1]), str(lut[i]))
             grid.loc[(
-                grid['id_range_m'] > lut[i-1]) &
-                (grid['id_range_m'] < lut[i]), 'value'] = str(lut[i])
-        elif i == 9:
-            grid.loc[(grid['id_range_m'] > lut[i]), 'decile'] = str(i)
-            grid.loc[(grid['id_range_m'] > lut[i]), 'value'] = str(lut[i])
+                grid['id_range_m'] >= lut[i-1]) &
+                (grid['id_range_m'] <= lut[i]), 'value'] = value_name
+        elif i == 10:
+            grid.loc[(grid['id_range_m'] > lut[i-1]), 'decile'] = str(i)
+            value_name = '>{}'.format(str(lut[i-1]))
+            grid.loc[(grid['id_range_m'] > lut[i-1]), 'value'] = value_name
         else:
             continue
 
     np.random.seed(2)
 
-    idx = grid.groupby(['decile'])['area_km2'].transform(max) == grid['area_km2']
-    sampling_areas = grid[idx]
+    grid = grid.loc[grid['area_km2'] > 2400].reset_index()
+
+    sampling_areas = grid.groupby(['decile']).apply(lambda x: x.sample(1)).reset_index(drop=True)
 
     directory = os.path.join(DATA_INTERMEDIATE, iso3, 'sampling_area')
 
@@ -488,10 +313,15 @@ def select_grid_sampling_areas(iso3, grid, lut):
     return sampling_areas
 
 
-def get_points(iso3, sampling_areas, tile_lookup):
+def get_points(iso3, sampling_areas, tile_lookup, point_spacing):
     """
 
     """
+    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'sampling_points')
+
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
     sampling_areas = sampling_areas.to_crs("epsg:3857")
 
     for idx, sampling_area in sampling_areas.iterrows():
@@ -502,11 +332,7 @@ def get_points(iso3, sampling_areas, tile_lookup):
 
         xmin, ymin, xmax, ymax = sampling_area['geometry'].bounds
 
-        #100km sides, leading to 100km^2 area
-        length = 1e4
-        wide = 1e4
-
-        polygons = manually_create_grid(xmin, ymin, xmax, ymax, length, wide)
+        polygons = manually_create_grid(xmin, ymin, xmax, ymax, point_spacing, point_spacing)
 
         #make geopandas dataframes
         grid_sample = gpd.GeoDataFrame({'geometry': polygons}, crs="epsg:3857")
@@ -519,15 +345,10 @@ def get_points(iso3, sampling_areas, tile_lookup):
         grid_sample = grid_sample.to_crs("epsg:4326") #convert to lon lat
 
         ##get the highest points in each grid sample tile
-        sampling_points = find_points(grid_sample, tile_lookup, filename)#[:1]
+        sampling_points = find_points(iso3, grid_sample, tile_lookup, filename)#[:1]
 
         ##convert to projected for viewsheding
         sampling_points = sampling_points.to_crs("epsg:4326")
-
-        directory = os.path.join(DATA_INTERMEDIATE, iso3, 'sampling_points')
-
-        if not os.path.exists(directory):
-            os.makedirs(directory)
 
         path_output = os.path.join(directory, filename + '.shp')
         sampling_points.to_file(path_output)
@@ -535,12 +356,12 @@ def get_points(iso3, sampling_areas, tile_lookup):
     return sampling_points
 
 
-def find_points(grid_sample, tile_lookup, filename):
+def find_points(iso3, grid_sample, tile_lookup, filename):
     """
 
     """
     filename_2 = filename + '.shp'
-    directory = os.path.join(DATA_INTERMEDIATE, 'PER', 'sampling_area')
+    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'sampling_points')
     path_output = os.path.join(directory, filename_2)
 
     if os.path.exists(path_output):
@@ -550,42 +371,18 @@ def find_points(grid_sample, tile_lookup, filename):
 
     for idx, grid_tile in grid_sample.iterrows():
 
-        path_input = find_tile(
-                        grid_tile['geometry'].bounds,
-                        tile_lookup
-                    )
+        min_x, min_y, max_x, max_y = grid_tile['geometry'].bounds
 
-        stats = zonal_stats(grid_tile['geometry'],
-                    path_input,
-                    stats = ['max'],
-                    raster_out = True,
-                    geojson_out = True,
-                    nodata=-999
-                )
-
-        arr = stats[0]['properties']['mini_raster_array']
-        col = np.argmax(np.max(arr, axis=0))
-        row = np.argmax(np.max(arr, axis=1))
-        c, a, b, f, d, e = stats[0]['properties']['mini_raster_affine'].to_gdal()
-
-        ##global coordinates to pixel center using base-0 raster index
-        x = a * col + b * row + a * 0.5 + b * 0.5 + c
-        y = d * col + e * row + d * 0.5 + e * 0.5 + f
+        geom = Point(random.uniform(min_x, max_x), random.uniform(min_y, max_y))
 
         output.append({
             'type': 'Feature',
-            'geometry': {
-                'type': 'Point',
-                'coordinates': (x, y)
-            },
+            'geometry': geom,
             'properties': {
-                'height': stats[0]['properties']['max']
             }
         })
 
     output = gpd.GeoDataFrame.from_features(output, crs='epsg:4326')
-
-    output.to_file(path_output)
 
     return output
 
@@ -641,7 +438,10 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
             y = point['geometry'].coords[0][1]
 
             if not os.path.exists(file_path):
-                viewshed((x, y), path_input, path_output, filename2, 40000, 'epsg:4326')
+                try:
+                    viewshed((x, y), path_input, path_output, filename2, 45000, 'epsg:4326')
+                except:
+                    continue
 
             seen = set()
 
@@ -822,9 +622,9 @@ def collect_results(iso3, sampling_areas):
         data = pd.read_csv(os.path.join(directory, filename + '.csv'))
 
         seen = set()
-        interval_size = 10000
+        interval_size = 2500
 
-        for distance_lower in range(0, 40000, interval_size):
+        for distance_lower in range(0, 45000, interval_size):
 
             distance_upper = distance_lower + interval_size
 
@@ -851,14 +651,25 @@ def collect_results(iso3, sampling_areas):
 
                         seen.add(path_id)
 
+
+            if clos > 0:
+                clos_probability = (clos / (clos + nlos))
+            else:
+                clos_probability = 'no data'
+
+            if nlos > 0:
+                nlos_probability = (nlos / (clos + nlos))
+            else:
+                nlos_probability = 'no data'
+
             output.append({
                 'decile': item['decile'],
                 'id_range_m': item['id_range_m'],
                 'distance_lower': distance_lower,
                 'distance_upper': distance_upper,
                 'total_samples': clos + nlos,
-                'clos_probability': (clos / (clos + nlos)),
-                'nlos_probability': (nlos / (clos + nlos)),
+                'clos_probability': clos_probability,
+                'nlos_probability': nlos_probability,
             })
 
     output = pd.DataFrame(output)
@@ -869,57 +680,36 @@ def collect_results(iso3, sampling_areas):
 if __name__ == "__main__":
 
     countries = [
-        # "PER",
-        "IDN"
+        ("PER", 5e4, 5e3),
+        ("IDN", 5e4, 5e3),
     ]
 
-    side_lengths = [
-        1e4,
-        1e5
-    ]
+    for country in countries:
 
-    for iso3 in countries:
+        iso3 = country[0]
+        side_length = country[1]
+        point_spacing = country[2]
 
         ##Load the raster tile lookup
         tile_lookup = load_raster_tile_lookup(iso3)
 
-        ##Load the existing processed modeling regions
-        filename = "modeling_regions.shp"
-        path = os.path.join(DATA_INTERMEDIATE, iso3, "modeling_regions", filename)
-        region_shapes = gpd.read_file(path, crs="epsg:4326")
+        ##Generate grids
+        generate_grid(iso3, side_length) #1e5
 
-        ##Load the existing processed lookup by GID area
-        filename = "population_and_terrain_lookup.csv"
-        path = os.path.join(DATA_INTERMEDIATE, iso3, filename)
-        terrain_lookup = pd.read_csv(path)
-
-        ##Modeling regions lookup
-        terrain_lookup = get_terrain_lookup(region_shapes, terrain_lookup, iso3)
+        # ##Add interdecile range to grid
+        grid = add_id_range_data_to_grid(iso3, tile_lookup, side_length)
 
         ##Get the terrain deciles
-        terrain_values = estimate_terrain_deciles(terrain_lookup)
-
-        ##Generate grids
-        generate_grid(iso3, tile_lookup, 1e4)
-        generate_grid(iso3, tile_lookup, 1e5)
-
-        ##Add data to lower grid
-        grid = add_pop_data_to_grid(iso3, tile_lookup)
-
-        ##Sum from the lower grid to the upper grid
-        grid = sum_to_upper_grid(iso3)
-
-        ##Add interdecile range to grid
-        grid = add_id_range_data_to_grid(iso3, tile_lookup)
+        terrain_values = estimate_terrain_deciles(grid)
 
         ##Get the grid tile samples
-        sampling_areas = select_grid_sampling_areas(iso3, grid, terrain_values)
+        sampling_areas = select_grid_sampling_areas(iso3, grid, terrain_values)#[:1]
 
         ##Generate the terrain lookup
-        sampling_points = get_points(iso3, sampling_areas, tile_lookup)[:1]
+        sampling_points = get_points(iso3, sampling_areas, tile_lookup, point_spacing)#[:1]
 
         ##Process viewsheds
-        generate_viewsheds(iso3, sampling_areas[:1], sampling_points)
+        generate_viewsheds(iso3, sampling_areas, sampling_points)
 
         ## Collect results
         collect_results(iso3, sampling_areas)
