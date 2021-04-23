@@ -680,8 +680,8 @@ def collect_results(iso3, sampling_areas):
 if __name__ == "__main__":
 
     countries = [
-        ("PER", 5e4, 5e3),
-        ("IDN", 5e4, 5e3),
+        ("PER", 5e4, 25e2),
+        ("IDN", 5e4, 25e2),
     ]
 
     for country in countries:
