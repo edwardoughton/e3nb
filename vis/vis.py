@@ -13,6 +13,7 @@ import pandas as pd
 import geopandas as gpd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import contextily as ctx
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'script_config.ini'))
@@ -21,92 +22,109 @@ BASE_PATH = CONFIG['file_locations']['base_path']
 RESULTS = os.path.join(BASE_PATH, '..', 'results')
 VIS_FIGURES = os.path.join(BASE_PATH, '..', 'vis', 'figures')
 
-def vis(countries):
+def vis():
     """
     Visualize results.
 
     """
-    data_to_plot = []
+    strategy = [
+        ('clos', 'CLOS-only\n(Red: Settlements, Yellow: Towers)'),
+        ('nlos', 'Hybrid CLOS-NLOS\n(Red: Settlements, Yellow: Towers)')
+    ]
 
-    for country in countries:
+    path = os.path.join(RESULTS, 'PER', 'edges', 'clos', 'PER.1.3_1.shp')
+    clos = gpd.read_file(path, crs='epsg:4326')
+    clos['strategy'] = 'clos'
 
-        data = []
+    path = os.path.join(RESULTS, 'PER', 'edges', 'nlos', 'PER.1.3_1.shp')
+    nlos = gpd.read_file(path, crs='epsg:4326')
+    nlos['strategy'] = 'nlos'
 
-        path = os.path.join(RESULTS, country, 'results.csv')
-        country_results = pd.read_csv(path)
-        country_results = country_results.to_dict('records')
+    data = pd.concat([clos, nlos])
+    data['Type'] = 'Routing Path'
 
-        for item in country_results:
-            data.append({
-                'country': country,
-                'strategy': item['strategy'],
-                'population_covered': item['population_covered'] / 1e6,
-                'network_cost': item['network_cost'] / 1e9,
-                'cost_per_pop': item['cost_per_pop'],
+    filename = 'settlements.shp'
+    path = os.path.join(BASE_PATH, 'intermediate', 'PER', 'settlements')
+    settlements = gpd.read_file(os.path.join(path, filename), crs='epsg:4326')
+
+    route_buffer = data.copy()
+    route_buffer = route_buffer.to_crs('epsg:3857')
+    route_buffer['geometry'] = route_buffer['geometry'].buffer(10)
+    route_buffer = route_buffer.to_crs('epsg:4326')
+    settlements = gpd.overlay(settlements, route_buffer, how='intersection')
+    settlements['Type'] = 'Settlements'
+    settlements = settlements[['geometry', 'Type']]
+
+    data1 = data.loc[data['strategy'] == strategy[0][0]]
+    all_data_as_dicts = data1.to_dict('records')#[:1]
+
+    points = []
+
+    for item in all_data_as_dicts:
+        for i in range(0, 2):
+            point = item['geometry'].coords[i]
+            points.append({
+                'type': 'Feature',
+                'geometry': {
+                    'type': 'Point',
+                    'coordinates': point,
+                },
+                'properties': {
+                    'length': item['length'],
+                    'link_los': item['link_los'],
+                    'status': item['status'],
+                    'strategy': item['strategy'],
+                    'Type': item['Type'],
+                }
             })
+    points = gpd.GeoDataFrame.from_features(points, crs='epsg:4326')
 
-        data = pd.DataFrame(data)
+    data2 = data.loc[data['strategy'] == strategy[1][0]]
+    all_data_as_dicts = data2.to_dict('records')#[:1]
 
-        data = data.sort_values('cost_per_pop')
+    points2 = []
 
-        data = data[['country', 'strategy', 'population_covered', 'network_cost']]
+    for item in all_data_as_dicts:
+        for i in range(0, 2):
+            point = item['geometry'].coords[i]
+            points2.append({
+                'type': 'Feature',
+                'geometry': {
+                    'type': 'Point',
+                    'coordinates': point,
+                },
+                'properties': {
+                    'length': item['length'],
+                    'link_los': item['link_los'],
+                    'status': item['status'],
+                    'strategy': item['strategy'],
+                    'Type': item['Type'],
+                }
+            })
+    points2 = gpd.GeoDataFrame.from_features(points2, crs='epsg:4326')
 
-        los = data.loc[data['strategy'] == 'los']
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 10))
 
-        los = los.copy()
+    settlements.plot(color='red', markersize=15, legend=True, ax=ax1, zorder=15)
+    points.plot(color='yellow', markersize=7, legend=True, ax=ax1, zorder=10)
+    data.plot(lw=1, legend=True, ax=ax1, zorder=5)
 
-        population = los['population_covered'].sum()
+    settlements.plot(color='red', markersize=15, legend=True, ax=ax2, zorder=15)
+    points2.plot(color='yellow', markersize=7, legend=True, ax=ax2, zorder=10)
+    data.plot(lw=1, legend=True, ax=ax2, zorder=5)
 
-        los['pop_perc'] = los['population_covered'] / population * 100
+    ax1.title.set_text('{}'.format(strategy[0][1]))
+    ax2.title.set_text('{}'.format(strategy[1][1]))
+    ctx.add_basemap(ax1, crs=data.crs)
+    ctx.add_basemap(ax2, crs=data.crs)
 
-        los['pop_cumsum'] = los.groupby(by=['strategy', 'country'])['pop_perc'].cumsum()
-        los['cost_cumsum'] = los.groupby(by=['strategy', 'country'])['network_cost'].cumsum()
-
-        nlos = data.loc[data['strategy'] == 'nlos']
-        nlos = nlos.copy()
-
-        population = nlos['population_covered'].sum()
-        nlos['pop_perc'] = nlos['population_covered'] / population * 100
-        nlos['pop_cumsum'] = nlos.groupby(by=['strategy', 'country'])['pop_perc'].cumsum()
-        nlos['cost_cumsum'] = nlos.groupby(by=['strategy', 'country'])['network_cost'].cumsum()
-
-        data = los.append(nlos)
-        data = data.to_dict('records')
-
-        data_to_plot = data_to_plot + data
-
-    data_to_plot = pd.DataFrame(data_to_plot)
-
-    data_to_plot = data_to_plot[['country', 'strategy', 'pop_cumsum', 'cost_cumsum']]
-
-    data_to_plot.columns = ['Country', 'Strategy', 'Population Covered (%)', 'Cumulative Cost ($USD Billions)']
-
-    data_to_plot['Strategy'] = data_to_plot['Strategy'].map({'los': 'LOS', 'nlos': 'NLOS'})
-
-    plot = sns.relplot(data=data_to_plot,
-    x="Population Covered (%)", y="Cumulative Cost ($USD Billions)",hue="Strategy", col="Country",
-    kind="line")
-
-    plot.savefig(VIS_FIGURES + '/cost.png', dpi=300)
-
-    data_to_plot.to_csv(os.path.join(VIS_FIGURES, '..', 'vis_data.csv'), index=False)
+    filename = os.path.join(VIS_FIGURES, 'test.png')
+    plt.savefig(filename, pad_inches=0, dpi=100)
+    plt.close()
 
     return print('Completed visualization')
 
 
 if __name__ == '__main__':
 
-    # countries = find_country_list(['Africa'])
-
-    # countries = [
-    #     {'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2, #'regional_nodes_level': 3,
-    #         'region': 'SSA', 'pop_density_km2': 25, 'settlement_size': 500,
-    #         'subs_growth': 3.5, 'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
-    #     },
-    # ]
-
-    # for country in countries:
-
-    countries = ['PER', 'IDN']
-
-    vis(countries)
+    vis()
