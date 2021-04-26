@@ -118,7 +118,7 @@ def vis():
     ctx.add_basemap(ax1, crs=data.crs)
     ctx.add_basemap(ax2, crs=data.crs)
 
-    filename = os.path.join(VIS_FIGURES, 'test.png')
+    filename = os.path.join(VIS_FIGURES, 'network_panel_plot.png')
     plt.savefig(filename, pad_inches=0, dpi=100)
     plt.close()
 
