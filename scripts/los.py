@@ -23,6 +23,7 @@ import rasterio
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from rasterio.mask import mask
 from rasterstats import zonal_stats, gen_zonal_stats
+from tqdm import tqdm
 
 grass7bin = r'"C:\Program Files\GRASS GIS 7.8\grass78.bat"'
 os.environ['GRASSBIN'] = grass7bin
@@ -399,14 +400,15 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
     if not os.path.exists(folder_out_viewsheds):
         os.makedirs(folder_out_viewsheds)
 
-    for idx, sampling_area in sampling_areas.iterrows():
+    for idx, sampling_area in tqdm(sampling_areas.iterrows(),
+        total=sampling_areas.shape[0]):
 
         output = []
 
         lon = sampling_area['geometry'].representative_point().coords[0][0]
         lat = sampling_area['geometry'].representative_point().coords[0][1]
         area_filename = "{}-{}".format(lon, lat)
-        print('Working on {}'.format(area_filename))
+        print('--Working on {}'.format(area_filename))
 
         ##load sampling points
         directory = os.path.join(DATA_INTERMEDIATE, iso3, 'sampling_points')
@@ -421,7 +423,7 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
             #needs a loop because the data structure needs a series
             path_input = find_tile(item['geometry'].bounds, tile_lookup)
 
-        for idx, point in points.iterrows():
+        for idx, point in tqdm(points.iterrows(), total=points.shape[0]):
 
             results = []
 
@@ -441,11 +443,11 @@ def generate_viewsheds(iso3, sampling_areas, sampling_points):
                 try:
                     viewshed((x, y), path_input, path_output, filename2, 45000, 'epsg:4326')
                 except:
-                    continue
+                    print('--Viewshed already exists')
 
             seen = set()
 
-            for idx, node in points.iterrows():
+            for idx, node in tqdm(points.iterrows(), total=points.shape[0]):
 
                 x2 = node['geometry'].coords[0][0]
                 y2 = node['geometry'].coords[0][1]
