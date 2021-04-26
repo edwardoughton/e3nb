@@ -13,7 +13,7 @@ NLOS.
 ## Figure 1 - Example of Clear-Line-Of-Sight versus diffractive Non-Line-Of-Sight links
 
 <p align="center">
-  <img src="/figures/clos_vs_nlos.png" />
+  <img src="/figures/clos_vs_nlos.PNG" />
 </p>
 
 Using the **e3nb** codebase, different 3D wireless link strategies can be compared.
@@ -23,7 +23,7 @@ flow diagram illustrated in Figure 2 represents a standardized approach.
 ## Figure 2 Flow diagram for deployment of Clear-Line-Of-Sight links
 
 <p align="center">
-  <img src="/figures/clos_flow.png" />
+  <img src="/figures/clos_flow.PNG" />
 </p>
 
 Equally, as more Mobile Network Operators move to deploy diffractive Non-Line-Of-Sight
@@ -34,7 +34,7 @@ before undertaking detailed Quality of Service (QoS) Radio Frequency (RF) engine
 ## Figure 3 Flow diagram for deployment of Non-Line-Of-Sight links
 
 <p align="center">
-  <img src="/figures/nlos_flow.png" />
+  <img src="/figures/nlos_flow.PNG" />
 </p>
 
 Once the **e3nb** codebase has been fully executed, an example of the types of
