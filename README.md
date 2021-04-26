@@ -5,7 +5,9 @@ Engineering-Economic Evaluation of Non-Line-of-Sight Backhaul (e3nb)
 backhaul assessment.
 
 The codebase enables the investment requirements of Clear-Line-Of-Sight and diffractive
-Non-Line-Of-Sight (NLOS) wireless backhaul to be quantified using 3D viewshed methods.
+Non-Line-Of-Sight (NLOS) wireless backhaul to be quantified using 3D viewshed methods. 
+The aim is to prioritize areas for providing broadband connectivity, helping to connect 
+more people to the internet. 
 
 Figure 1 provides an example of the two deployment situations for CLOS and diffractive
 NLOS.
