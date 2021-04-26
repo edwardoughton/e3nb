@@ -18,9 +18,9 @@ NLOS.
   <img src="/figures/clos_vs_nlos.PNG" />
 </p>
 
-Using the **e3nb** codebase, different 3D wireless link strategies can be compared.
-For example, when deploying only Clear-Line-Of-Sight wireless links, the generalized
-flow diagram illustrated in Figure 2 represents a standardized approach.
+Using the **e3nb** codebase, different strategies can be compared. For example, when 
+deploying only Clear-Line-Of-Sight links, the generalized flow diagram illustrated 
+in Figure 2 represents a standardized approach.
 
 ## Figure 2 Flow diagram for deployment of Clear-Line-Of-Sight links
 
@@ -113,4 +113,4 @@ And the results can be collected and disaggregated:
 Thanks for the support
 ======================
 
-**e3nb** was written and developed at `George Mason University <https://www2.gmu.edu/>`.
+**e3nb** was written and developed at George Mason University.
