@@ -562,6 +562,279 @@ def find_nodes(country, regions):
     return interim
 
 
+def generate_agglomeration_lut(country):
+    """
+    Generate a lookup table of agglomerations.
+    """
+    iso3 = country['iso3']
+    regional_level = country['regional_level']
+    GID_level = 'GID_{}'.format(regional_level)
+
+    core_node_level = 'GID_{}'.format(country['core_node_level'])
+    regional_node_level = 'GID_{}'.format(country['regional_node_level'])
+
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations')
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    path_output = os.path.join(folder, 'agglomerations.shp')
+
+    if os.path.exists(path_output):
+        return print('Agglomeration processing has already completed')
+
+    print('Working on {} agglomeration lookup table'.format(iso3))
+
+    filename = 'regions_{}_{}.shp'.format(regional_level, iso3)
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'regions')
+    path = os.path.join(folder, filename)
+    regions = gpd.read_file(path, crs="epsg:4326")#[:1]
+
+    path_settlements = os.path.join(DATA_INTERMEDIATE, iso3, 'settlements.tif')
+    settlements = rasterio.open(path_settlements, 'r+')
+    settlements.nodata = 255
+    settlements.crs = {"init": "epsg:4326"}
+
+    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations', 'tifs')
+    if not os.path.exists(folder_tifs):
+        os.makedirs(folder_tifs)
+
+    for idx, region in regions.iterrows():
+
+        path_output = os.path.join(folder_tifs, region[GID_level] + '.tif')
+
+        if os.path.exists(path_output):
+            continue
+
+        # geo = gpd.GeoDataFrame({'geometry': region['geometry']}, index=[idx])
+        geo = gpd.GeoDataFrame(geometry=gpd.GeoSeries(region['geometry']))
+
+        coords = [json.loads(geo.to_json())['features'][0]['geometry']]
+
+        #chop on coords
+        out_img, out_transform = mask(settlements, coords, crop=True)
+
+        # Copy the metadata
+        out_meta = settlements.meta.copy()
+
+        out_meta.update({"driver": "GTiff",
+                        "height": out_img.shape[1],
+                        "width": out_img.shape[2],
+                        "transform": out_transform,
+                        "crs": 'epsg:4326'})
+
+        with rasterio.open(path_output, "w", **out_meta) as dest:
+                dest.write(out_img)
+
+    print('Completed settlement.tif regional segmentation')
+
+    nodes, missing_nodes = find_settlement_nodes(country, regions)
+
+    nodes = gpd.GeoDataFrame.from_features(nodes, crs='epsg:4326')
+
+    bool_list = nodes.intersects(regions['geometry'].unary_union)
+    nodes = pd.concat([nodes, bool_list], axis=1)
+    nodes = nodes[nodes[0] == True].drop(columns=0)
+
+    agglomerations = []
+
+    print('Identifying agglomerations')
+    for idx1, region in regions.iterrows():
+        seen_coords = set()
+        for idx2, node in nodes.iterrows():
+            if node['geometry'].intersects(region['geometry']):
+
+                x = float(str(node['geometry'].x)[:12])
+                y = float(str(node['geometry'].y)[:12])
+                coord = '{}_{}'.format(x ,y)
+
+                if coord in seen_coords:
+                    continue #avoid duplicates
+
+                agglomerations.append({
+                    'type': 'Feature',
+                    'geometry': mapping(node['geometry']),
+                    'properties': {
+                        'id': idx1,
+                        'GID_0': region['GID_0'],
+                        GID_level: region[GID_level],
+                        core_node_level: region[core_node_level],
+                        regional_node_level: region[regional_node_level],
+                        'population': node['sum'],
+                    }
+                })
+                seen_coords.add(coord)
+
+        # if no settlements above the threshold values
+        # find the most populated 1km2 cell centroid
+        if len(seen_coords) == 0:
+
+            pop_tif = os.path.join(folder_tifs, region[GID_level] + '.tif')
+
+            with rasterio.open(pop_tif) as src:
+                data = src.read()
+                polygons = rasterio.features.shapes(data, transform=src.transform)
+                shapes_df = gpd.GeoDataFrame.from_features(
+                    [
+                        {'geometry': poly, 'properties':{'value':value}}
+                        for poly, value in polygons
+                    ],
+                    crs='epsg:4326'
+                )
+                shapes_df =shapes_df.nlargest(1, columns=['value'])
+
+                shapes_df['geometry'] = shapes_df['geometry'].to_crs('epsg:3857')
+                shapes_df['geometry'] = shapes_df['geometry'].centroid
+                shapes_df['geometry'] = shapes_df['geometry'].to_crs('epsg:4326')
+                geom = shapes_df['geometry'].values[0]
+
+                x = float(str(node['geometry'].x)[:12])
+                y = float(str(node['geometry'].y)[:12])
+                coord = '{}_{}'.format(x ,y)
+
+                if coord in seen_coords:
+                    continue #avoid duplicates
+
+                agglomerations.append({
+                        'type': 'Feature',
+                        'geometry': mapping(geom),
+                        'properties': {
+                            'id': 'regional_node',
+                            'GID_0': region['GID_0'],
+                            GID_level: region[GID_level],
+                            core_node_level: region[core_node_level],
+                            regional_node_level: region[regional_node_level],
+                            'population': shapes_df['value'].values[0],
+                        }
+                    })
+
+    agglomerations = gpd.GeoDataFrame.from_features(
+            [
+                {
+                    'geometry': item['geometry'],
+                    'properties': {
+                        'id': item['properties']['id'],
+                        'GID_0':item['properties']['GID_0'],
+                        GID_level: item['properties'][GID_level],
+                        core_node_level: item['properties'][core_node_level],
+                        regional_node_level: item['properties'][regional_node_level],
+                        'population': item['properties']['population'],
+                    }
+                }
+                for item in agglomerations
+            ],
+            crs='epsg:4326'
+        )
+
+    agglomerations = agglomerations.drop_duplicates(subset=['geometry']).reset_index()
+
+    folder = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations')
+    path_output = os.path.join(folder, 'agglomerations' + '.shp')
+
+    agglomerations.to_file(path_output)
+
+    agglomerations['lon'] = agglomerations['geometry'].x
+    agglomerations['lat'] = agglomerations['geometry'].y
+    agglomerations = agglomerations[['lon', 'lat', GID_level, 'population']]
+    agglomerations = agglomerations.drop_duplicates(subset=['lon', 'lat']).reset_index()
+    agglomerations.to_csv(os.path.join(folder, 'agglomerations.csv'), index=False)
+
+    return print('Agglomerations layer complete')
+
+
+def find_settlement_nodes(country, regions):
+    """
+    Find key nodes.
+    """
+    iso3 = country['iso3']
+    regional_level = country['regional_level']
+    GID_level = 'GID_{}'.format(regional_level)
+
+    core_node_level = 'GID_{}'.format(country['core_node_level'])
+    regional_node_level = 'GID_{}'.format(country['regional_node_level'])
+
+    threshold = country['pop_density_km2']
+    settlement_size = country['settlement_size']
+
+    folder_tifs = os.path.join(DATA_INTERMEDIATE, iso3, 'agglomerations', 'tifs')
+
+    interim = []
+    missing_nodes = set()
+
+    print('Working on gathering data from regional rasters')
+    for idx, region in regions.iterrows():
+
+        path = os.path.join(folder_tifs, region[GID_level] + '.tif')
+
+        with rasterio.open(path) as src:
+            data = src.read()
+            data[data < threshold] = 0
+            data[data >= threshold] = 1
+            polygons = rasterio.features.shapes(data, transform=src.transform)
+            shapes_df = gpd.GeoDataFrame.from_features(
+                [
+                    {'geometry': poly, 'properties':{'value':value}}
+                    for poly, value in polygons
+                    if value > 0
+                ]
+            )
+        if len(shapes_df) == 0:
+            continue
+
+        shapes_df = shapes_df.set_crs('epsg:4326')
+
+        geojson_region = [
+            {
+                'geometry': region['geometry'],
+                'properties': {
+                    GID_level: region[GID_level],
+                    core_node_level: region[core_node_level],
+                    regional_node_level: region[regional_node_level],
+                }
+            }
+        ]
+
+        gpd_region = gpd.GeoDataFrame.from_features(
+                [
+                    {'geometry': poly['geometry'],
+                    'properties':{
+                        GID_level: poly['properties'][GID_level],
+                        core_node_level: region[core_node_level],
+                        regional_node_level: region[regional_node_level],
+                        }}
+                    for poly in geojson_region
+                ], crs='epsg:4326'
+            )
+
+        if len(shapes_df) == 0:
+            continue
+
+        nodes = gpd.overlay(shapes_df, gpd_region, how='intersection')
+
+        stats = zonal_stats(shapes_df['geometry'], path, stats=['count', 'sum'])
+
+        stats_df = pd.DataFrame(stats)
+
+        nodes = pd.concat([shapes_df, stats_df], axis=1).drop(columns='value')
+
+        nodes_subset = nodes[nodes['sum'] >= settlement_size]
+
+        if len(nodes_subset) == 0:
+            missing_nodes.add(region[GID_level])
+
+        for idx, item in nodes_subset.iterrows():
+            interim.append({
+                    'geometry': item['geometry'].centroid,
+                    'properties': {
+                        GID_level: region[GID_level],
+                        core_node_level: region[core_node_level],
+                        regional_node_level: region[regional_node_level],
+                        'count': item['count'],
+                        'sum': item['sum']
+                    }
+            })
+
+    return interim, missing_nodes
+
+
 def find_largest_regional_settlement(country):
     """
     Find the largest settlement in each region as the main regional
@@ -982,6 +1255,72 @@ def create_raster_tile_lookup(country):
     return
 
 
+def process_canopy_height_data(country):
+    """
+    Load in canopy height data and subset by country.
+
+    """
+    iso3 = country['iso3']
+
+    directory = os.path.join(DATA_INTERMEDIATE, iso3, 'canopy_heights')
+
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    path_processed = os.path.join(directory, 'canopy_heights.shp')
+
+    path_heights = os.path.join(
+        DATA_RAW,
+        'LIDAR_FOREST_CANOPY_HEIGHTS_1271',
+        'data',
+        'All_countries_hmax_hlorey.shp'
+    )
+
+    height_data = gpd.read_file(path_heights, crs='epsg:4326')
+
+    height_data = height_data.loc[height_data['Country'] == country['name']]
+
+    height_data.to_file(path_processed, driver='ESRI Shapefile')
+
+    return
+
+
+
+# def process_canopy_height_data(country):
+#     """
+#     Load in canopy height data and subset by country.
+
+#     """
+
+    # path = os.path.join(DATA_INTERMEDIATE, iso3, 'national_outline.shp')
+    # outline = gpd.read_file(path, crs='epsg:4326')
+    # outline = outline['geometry'].envelope
+
+    # output = []
+
+    # for idx, height_point in height_data.iterrows():
+    #     if height_point['geometry'].intersects(outline[0]):
+
+
+
+
+
+    # height_data = gpd.overlay(height_data, outline, how='intersection')
+    # print(height_data)
+    # try:
+    #     print(path_processed)
+    #     #Writing global_regions.shp to file
+
+    # except:
+    #     print('Unable to write canopy_heights for {}'.format(iso3))
+    #     pass
+
+
+    # output = pd.DataFrame(output)
+    # directory = os.path.join(DATA_INTERMEDIATE, iso3, 'modis_lookup.csv')
+    # output.to_csv(directory, index=False)
+
+
 def create_pop_and_terrain_regional_lookup(country):
     """
     Extract regional luminosity and population data.
@@ -998,11 +1337,15 @@ def create_pop_and_terrain_regional_lookup(country):
 
     filename = 'modeling_regions.shp'
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'modeling_regions', filename)
-    modeling_regions = gpd.read_file(path, crs='epsg:4326')#[:5]
+    modeling_regions = gpd.read_file(path, crs='epsg:4326')#[:10]
 
     filename = 'main_nodes.shp'
     path = os.path.join(DATA_INTERMEDIATE, iso3, 'network_routing_structure', filename)
     main_nodes = gpd.read_file(path, crs='epsg:4326')#[:5]
+
+    filename = 'canopy_heights.shp'
+    path = os.path.join(DATA_INTERMEDIATE, iso3, 'canopy_heights', filename)
+    height_data = gpd.read_file(path, crs='epsg:4326')#[:5]
 
     tile_lookup = load_raster_tile_lookup(country)
 
@@ -1064,6 +1407,18 @@ def create_pop_and_terrain_regional_lookup(country):
             continue
         modeling_region_id = main_node['GID_{}'.format(country['regional_level'])].values[0]
 
+        m_region = gpd.GeoDataFrame(gpd.GeoSeries(modeling_region['geometry']))
+        m_region = m_region.rename(columns={0:'geometry'}).set_geometry('geometry')
+        m_region = m_region.set_crs('epsg:4326')
+        canopy_height = gpd.overlay(height_data, m_region, how='intersection')
+
+        if len(canopy_height) > 0:
+            max_canopy_height = canopy_height['new_hmax'].max()
+            mean_canopy_height = canopy_height['new_hmax'].mean()
+        else:
+            max_canopy_height = 'no data'
+            mean_canopy_height = 'no data'
+
         output.append({
             'modeling_region': modeling_region_id,
             'regions': modeling_region['regions'],
@@ -1072,6 +1427,8 @@ def create_pop_and_terrain_regional_lookup(country):
             'population': population,
             'area_km2': area_km2,
             'pop_density_km2': pop_density_km2,
+            'max_canopy_height': max_canopy_height,
+            'mean_canopy_height': mean_canopy_height,
         })
 
     output = pd.DataFrame(output)
@@ -1277,18 +1634,22 @@ if __name__ == '__main__':
 
     countries = [
         {
-            'iso3': 'PER', 'iso2': 'PE', 'regional_level': 2,
+            'iso3': 'PER', 'iso2': 'PE', 'name': 'Peru',
+            'regional_level': 2,
             'lowest_regional_level': 3, 'region': 'LAT',
             'pop_density_km2': 50, 'settlement_size': 100,
             'main_settlement_size': 20000, 'subs_growth': 3.5,
-            'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+            'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16,
+            'core_node_level': 1, 'regional_node_level': 2,
         },
         {
-            'iso3': 'IDN', 'iso2': 'ID', 'regional_level': 2,
+            'iso3': 'IDN', 'iso2': 'ID', 'name': 'Indonesia',
+            'regional_level': 2,
             'lowest_regional_level': 3, 'region': 'SEA',
             'pop_density_km2': 50, 'settlement_size': 100,
             'main_settlement_size': 20000,  'subs_growth': 3.5,
-            'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16
+            'smartphone_growth': 5, 'cluster': 'C1', 'coverage_4G': 16,
+            'core_node_level': 2, 'regional_node_level': 2,
         },
     ]
 
@@ -1296,40 +1657,43 @@ if __name__ == '__main__':
 
         print('Working on {}'.format(country['iso3']))
 
-        ### Processing country boundary ready to export
-        process_country_shapes(country)
+        # ### Processing country boundary ready to export
+        # process_country_shapes(country)
 
-        ### Processing regions ready to export
-        process_regions(country)
+        # ### Processing regions ready to export
+        # process_regions(country)
 
-        ### Processing country population raster ready to export
-        process_settlement_layer(country)
+        # ### Processing country population raster ready to export
+        # process_settlement_layer(country)
 
-        ### Generating the settlement layer ready to export
-        generate_settlement_lut(country)
+        # # ### Generating the settlement layer ready to export
+        # generate_agglomeration_lut(country)
 
-        ### Find largest settlement in each region ready to export
-        find_largest_regional_settlement(country)
+        # ### Find largest settlement in each region ready to export
+        # find_largest_regional_settlement(country)
 
-        ### Get settlement routing paths
-        get_settlement_routing_paths(country)
+        # ### Get settlement routing paths
+        # get_settlement_routing_paths(country)
 
-        # ### Create regions to model
-        create_regions_to_model(country)
+        # # ### Create regions to model
+        # create_regions_to_model(country)
 
-        ### Create routing buffer zone
-        create_routing_buffer_zone(country)
+        # ### Create routing buffer zone
+        # create_routing_buffer_zone(country)
 
-        ### Generate raster tile lookup
-        create_raster_tile_lookup(country)
+        # ### Generate raster tile lookup
+        # create_raster_tile_lookup(country)
+
+        # ## Process tree canopy height data
+        # process_canopy_height_data(country)
 
         # Create population and terrain regional lookup
         create_pop_and_terrain_regional_lookup(country)
 
-        ## Process the modis data
-        process_modis(country)
+        # ## Process the modis data
+        # process_modis(country)
 
-        ## Generate modis tile lookup
-        create_modis_tile_lookup(country)
+        # ## Generate modis tile lookup
+        # create_modis_tile_lookup(country)
 
     print('Preprocessing complete')

@@ -21,6 +21,12 @@ def run(distances, frequencies, iterations, directory):
     Run script.
 
     """
+    pt = 20
+    gt = 20
+    lt = 4
+    gr = 20
+    lr = 4
+
     output = []
 
     distance_categories = set()
@@ -46,14 +52,34 @@ def run(distances, frequencies, iterations, directory):
 
                     frequency_category = get_frequency_category(rand_frequency)
 
-                    clearance = 8.66 * math.sqrt(rand_distance / rand_frequency)
+                    #calculate Equivalent Isotropically Radiated Power (EIRP)
+                    eirp = (
+                        float(pt) +
+                        float(gt) -
+                        float(lt)
+                    )
+
+                    fspl = 20*np.log10(rand_distance) + 20*np.log10(rand_frequency) + 32.44
+
+                    received_power = (eirp -
+                        fspl +
+                        gr -
+                        lr
+                    )
 
                     output.append({
                         'distance_category': distance_category,
                         'frequency_category': frequency_category,
-                        'distance_km': rand_distance,
                         'frequency_ghz': rand_frequency,
-                        'clearance': clearance,
+                        'iteration': i,
+                        'distance_km': rand_distance,
+                        'gain_t_db': gt,
+                        'power_t_db': pt,
+                        'losses_t_db': lt,
+                        'gain_r_db': gr,
+                        'losses_r_db': lr,
+                        'fspl_db': fspl,
+                        'received_power_db': received_power,
                     })
 
                     frequency_categories.add(frequency_category)
@@ -71,7 +97,7 @@ def run(distances, frequencies, iterations, directory):
                 if (item['frequency_category'] == frequency_category and
                     item['distance_category'] == distance_category):
 
-                    interim.append(item['clearance'])
+                    interim.append(item['received_power_db'])
 
             interim = np.array(interim)
 
@@ -86,14 +112,14 @@ def run(distances, frequencies, iterations, directory):
             })
 
     output = pd.DataFrame(output)
-    path = os.path.join(directory, 'fresnel_clearances.csv')
+    path = os.path.join(directory, 'rp_by_distance.csv')
     output.to_csv(path, index=False)
 
     percentiles = pd.DataFrame(percentiles)
-    path = os.path.join(directory, 'percentiles.csv')
+    path = os.path.join(directory, 'percentiles_distances.csv')
     percentiles.to_csv(path, index=False)
 
-    return print('Complete Fresnel simulation')
+    return print('Complete FSPL received signal simulation')
 
 
 def get_distance_category(rand_distance):
