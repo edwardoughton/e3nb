@@ -36,9 +36,13 @@ def vis():
     clos = gpd.read_file(path, crs='epsg:4326')
     clos['strategy'] = 'clos'
 
+    print('Number of towers required in CLOS is {}'.format(len(clos)))
+
     path = os.path.join(RESULTS, 'PER', 'edges', 'nlos', 'PER.1.3_1.shp')
     nlos = gpd.read_file(path, crs='epsg:4326')
     nlos['strategy'] = 'nlos'
+
+    print('Number of towers required in NLOS is {}'.format(len(nlos)))
 
     data = pd.concat([clos, nlos])
     data['Type'] = 'Routing Path'
@@ -103,7 +107,7 @@ def vis():
             })
     points2 = gpd.GeoDataFrame.from_features(points2, crs='epsg:4326')
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 10))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 8))
 
     settlements.plot(color='red', markersize=15, legend=True, ax=ax1, zorder=15)
     points.plot(color='yellow', markersize=7, legend=True, ax=ax1, zorder=10)

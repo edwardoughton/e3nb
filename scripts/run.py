@@ -10,6 +10,7 @@ import os
 import configparser
 import random
 import glob
+import math
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -23,7 +24,6 @@ from inputs import countries
 from inputs import strategies
 from inputs import rain_region_distances
 from inputs import frequency_lookup
-from inputs import fresnel_lookup
 from inputs import cost_dist
 
 grass7bin = r'"C:\Program Files\GRASS GIS 7.8\grass78.bat"'
@@ -40,6 +40,56 @@ BASE_PATH = CONFIG['file_locations']['base_path']
 DATA_RAW = os.path.join(BASE_PATH, 'raw')
 DATA_INTERMEDIATE = os.path.join(BASE_PATH, 'intermediate')
 RESULTS = os.path.join(BASE_PATH, '..', 'results')
+
+
+def import_fresnel_clearances():
+    """
+    Import the percentile values generated from fresnel.py.
+
+    """
+    filename = 'percentiles.csv'
+    path = os.path.join(DATA_INTERMEDIATE, 'model_inputs', filename)
+
+    data = pd.read_csv(path)
+
+    frequencies = data['frequency_category'].unique()
+    distances = data['distance_category'].unique()
+
+    output = {}
+
+    for distance in distances:
+
+        dist_dict = {}
+
+        for frequency in frequencies:
+
+            if distance == '<10 km':
+                distance_name = '0_10'
+            elif distance == '10-25 km':
+                distance_name = '10_25'
+            elif distance == '25-40 km':
+                distance_name = '25_40'
+            else:
+                print('Did not recognize percentile distance')
+
+            if frequency == '6-8 GHz':
+                frequency_name = '6_8'
+            elif frequency == '11-15 GHz':
+                frequency_name = '11_15'
+            elif frequency == '15-18 GHz':
+                frequency_name = '15_18'
+            else:
+                print('Did not recognize percentile distance')
+
+            for idx, row in data.iterrows():
+                if (row['distance_category'] == distance and
+                    row['frequency_category'] == frequency):
+
+                    dist_dict[frequency_name] = row['p_99']
+
+        output[distance_name] = dist_dict
+
+    return output
 
 
 def load_raster_tile_lookup(iso3):
@@ -399,6 +449,19 @@ def check_foliage_presence(routing_structure, modis_lookup):
         print('Did not recognize zonal stats result')
 
 
+def check_canopy_height(region_info, regional_lookup):
+    """
+    Check the regional canopy height.
+
+    """
+    mean_canopy_height = region_info['mean_canopy_height']
+
+    if mean_canopy_height == 'no data':
+        mean_canopy_height = 0
+
+    return mean_canopy_height
+
+
 def find_correct_tile(point, modis_lookup):
     """
 
@@ -430,7 +493,8 @@ def find_correct_tile(point, modis_lookup):
     return output
 
 
-def fresnel_clearance_lookup(path_length, frequency, fresnel_lookup, foliage):
+def fresnel_clearance_lookup(path_length, frequency,
+    fresnel_lookup, foliage, canopy_height):
     """
     Check fresnel clearance zone.
 
@@ -447,14 +511,19 @@ def fresnel_clearance_lookup(path_length, frequency, fresnel_lookup, foliage):
 
     for key, value in data.items():
 
-        if key.split('_')[2] == foliage:
-            lower = key.split('_')[0]
-            upper = key.split('_')[1]
+        lower = key.split('_')[0]
+        upper = key.split('_')[1]
 
-            if int(lower) < frequency <= int(upper):
+        if int(lower) < frequency <= int(upper):
+
+            if foliage == 'foliage':
+                return value + round(float(canopy_height))
+            elif foliage == 'nofoliage':
                 return value
-            #do not put an else here
-            #let it cycle and it will find the right value
+            else:
+                print('did not recognize foliage type')
+                #do not put an else here
+                #let it cycle and it will find the right value
 
 
 def find_los_viewshed(routing_structure, max_clos_distance,
@@ -627,10 +696,8 @@ def estimate_cost(path_length, frequency, cost_by_dist, antenna_height):
 
             for k, v in value.items():
                 if 'tower' in k:
-                    lower_height = int(k.split('_')[1])
-                    upper_height = int(k.split('_')[2])
-                    if not lower_height <= antenna_height < upper_height:
-                        continue
+                    v = int(math.ceil(antenna_height / 10)) * v
+
                 cost_dict[k] = v
 
     output.append(cost_dict)
@@ -940,6 +1007,8 @@ def get_settlement_costs(strategies, aggregated_results, all_settlements):
 
 if __name__ == '__main__':
 
+    fresnel_lookup = import_fresnel_clearances()
+
     for country in countries:
 
         iso3 = country['iso3']
@@ -961,7 +1030,7 @@ if __name__ == '__main__':
         results = []
         costs_by_settlement = []
 
-        for strategy in strategies:
+        for strategy in strategies:#[:1]:
 
             print('Working on {} in {}'.format(strategy, iso3))
 
@@ -1016,10 +1085,12 @@ if __name__ == '__main__':
 
                     foliage = check_foliage_presence(item, modis_lookup)
 
-                    clearance = fresnel_clearance_lookup(path_length, frequency,
-                                            fresnel_lookup, foliage)
+                    canopy_height = check_canopy_height(region_info, regional_lookup)
 
-                    antenna_height = clearance + 2
+                    clearance = fresnel_clearance_lookup(path_length, frequency,
+                                            fresnel_lookup, foliage, canopy_height)
+
+                    antenna_height = clearance + 1
 
                     costs = estimate_cost(
                         path_length,
@@ -1040,6 +1111,9 @@ if __name__ == '__main__':
                                     'population': region_info['population'],
                                     'area_km2': region_info['area_km2'],
                                     'pop_density_km2': region_info['pop_density_km2'],
+                                    'id_range_m': region_info['id_range_m'],
+                                    'max_canopy_height': region_info['max_canopy_height'],
+                                    'mean_canopy_height': region_info['mean_canopy_height'],
                                     'path_length': path_length,
                                     'link_los': item['properties']['link_los'],
                                     'frequency': frequency,
