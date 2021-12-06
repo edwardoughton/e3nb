@@ -102,8 +102,8 @@ def get_distance_category(rand_distance):
         distance_category = '<10 km'
     elif rand_distance >= 10 and rand_distance < 25:
         distance_category = '10-25 km'
-    elif rand_distance >= 25 and rand_distance < 40:
-        distance_category = '25-40 km'
+    elif rand_distance >= 25 and rand_distance < 45:
+        distance_category = '25-45 km'
     else:
         distance_category = 'unallocated distance'
         print('Could not allocate distance category')
@@ -130,7 +130,7 @@ if __name__ == "__main__":
     distances = [
         (0, 10),
         (10, 25),
-        (25, 40),
+        (25, 45),
     ]
 
     frequencies = [
