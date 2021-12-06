@@ -23,7 +23,7 @@ data$frequency_category = factor(data$frequency_category,
 data$distance_category = factor(data$distance_category,
                                 levels=c("<10 km",
                                          "10-25 km",
-                                         "25-40 km"))
+                                         "25-45 km"))
 
 plot1 = 
   ggplot(data, aes(received_power_db, frequency_category)) + coord_flip() +
@@ -32,7 +32,7 @@ plot1 =
        colour=NULL,
        subtitle = "Reported for all frequency and distance categories",
        x = 'Received Signal (dB)', y = "Frequency (GHz)") +
-  scale_x_continuous(expand = c(0, 0), limits = c(-40,0)) +
+  scale_x_continuous(expand = c(0, 0), limits = c(-40,5)) +
   facet_wrap(~distance_category)
 
 ########
@@ -54,7 +54,7 @@ plot2 =
        colour=NULL,
        subtitle = "Reported for all frequency and distance categories",
        x = 'Clearance (M)', y = "Frequency (GHz)") +
-  scale_x_continuous(expand = c(0, 0), limits = c(0,22.5)) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0,23)) +
   facet_wrap(~distance_category)
 
 combined <- ggarrange(plot1, plot2,   
